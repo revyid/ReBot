@@ -1,0 +1,15 @@
+{
+  "maxConcurrentMessages": 10,
+  "messageDelay": 500,
+  "rateLimitMax": 20,
+  "rateLimitWindow": 60000,
+  "cooldownPeriod": 300000,
+  "typingDelayMin": 300,
+  "typingDelayMax": 1500,
+  "allowSelfCommands": true,
+  "webServerEnabled": true,
+  "apiPort": 3000,
+  "autoSaveInterval": 30000,
+  "logLevel": "INFO",
+  "enablePerformanceMonitoring": true
+}

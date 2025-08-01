@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Bot Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.7.2/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone@7.22.9/babel.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 50%, #16213e 100%);
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+        .glass {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .glass-strong {
+            background: rgba(255, 255, 255, 0.12);
+            backdrop-filter: blur(25px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+        }
+        .glow {
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.3), 0 0 40px rgba(34, 197, 94, 0.1);
+        }
+        .glow-blue {
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.3), 0 0 40px rgba(59, 130, 246, 0.1);
+        }
+        .glow-purple {
+            box-shadow: 0 0 20px rgba(147, 51, 234, 0.3), 0 0 40px rgba(147, 51, 234, 0.1);
+        }
+        .pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: .8; transform: scale(1.05); }
+        }
+        .slide-up {
+            animation: slideUp 0.6s ease-out;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .fade-in {
+            animation: fadeIn 0.8s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .slide-in-right {
+            animation: slideInRight 0.5s ease-out;
+        }
+        @keyframes slideInRight {
+            from { transform: translateX(30px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        .hexagon {
+            clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+        }
+        .diamond {
+            clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        }
+        .floating {
+            animation: floating 3s ease-in-out infinite;
+        }
+        @keyframes floating {
+            0% { transform: translate(0, 0px); }
+            50% { transform: translate(0, -10px); }
+            100% { transform: translate(0, 0px); }
+        }
+        .tab-indicator {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #22c55e, #3b82f6);
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 2px 2px 0 0;
+        }
+        .status-dot {
+            animation: statusPulse 2s infinite;
+        }
+        @keyframes statusPulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.3); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .chart-container {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%);
+            border-radius: 16px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+        }
+        .chart-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent);
+        }
+        .log-item {
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
+            padding-left: 12px;
+            margin-left: 8px;
+        }
+        .log-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin: 4px 8px;
+        }
+        .log-item.error { border-left-color: #ef4444; }
+        .log-item.warning { border-left-color: #f59e0b; }
+        .log-item.info { border-left-color: #22c55e; }
+        .mobile-menu {
+            transform: translateY(-100%);
+            transition: transform 0.3s ease-in-out;
+        }
+        .mobile-menu.open {
+            transform: translateY(0);
+        }
+        .stat-card {
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+            animation: shimmer 3s infinite;
+        }
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        .progress-bar {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            overflow: hidden;
+            position: relative;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #22c55e, #3b82f6);
+            border-radius: 3px;
+            transition: width 0.5s ease-in-out;
+            position: relative;
+        }
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+            animation: progressShimmer 2s infinite;
+        }
+        @keyframes progressShimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        .real-time-indicator {
+            animation: realTimePulse 1s infinite;
+        }
+        @keyframes realTimePulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+        @media (max-width: 768px) {
+            .mobile-nav {
+                display: block;
+            }
+            .desktop-nav {
+                display: none;
+            }
+        }
+        @media (min-width: 769px) {
+            .mobile-nav {
+                display: none;
+            }
+            .desktop-nav {
+                display: block;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('status');
+            const [status, setStatus] = useState({ startTime: Date.now() });
+            const [users, setUsers] = useState([]);
+            const [admins, setAdmins] = useState([]);
+            const [banned, setBanned] = useState([]);
+            const [logs, setLogs] = useState([]);
+            const [currentTime, setCurrentTime] = useState(new Date());
+            const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+            const [messageStats, setMessageStats] = useState({
+                today: 0,
+                hourly: [],
+                peak: 0
+            });
+            const messageChartRef = useRef(null);
+            const userChartRef = useRef(null);
+            const activityChartRef = useRef(null);
+
+            const formatUptime = (startTime) => {
+                const now = Date.now();
+                const uptime = Math.floor((now - startTime) / 1000);
+                
+                const days = Math.floor(uptime / (24 * 3600));
+                const hours = Math.floor((uptime % (24 * 3600)) / 3600);
+                const minutes = Math.floor((uptime % 3600) / 60);
+                const seconds = uptime % 60;
+                
+                if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+                if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+                if (minutes > 0) return `${minutes}m ${seconds}s`;
+                return `${seconds}s`;
+            };
+
+            useEffect(() => {
+                const timeInterval = setInterval(() => {
+                    setCurrentTime(new Date());
+                }, 1000);
+
+                const socket = io('http://localhost:3000', { transports: ['websocket'] });
+
+                socket.on('status', (data) => {
+                    setStatus(prev => ({ ...prev, ...data }));
+                    updateCharts(data);
+                });
+                socket.on('users', (data) => setUsers(data));
+                socket.on('admins', (data) => setAdmins(data));
+                socket.on('banned', (data) => setBanned(data));
+                socket.on('log', (log) => {
+                    setLogs(prev => {
+                        const newLogs = [{ ...log, timestamp: new Date().toLocaleTimeString(), id: Date.now() }, ...prev];
+                        return newLogs.slice(0, 100);
+                    });
+                });
+                socket.on('messageStats', (data) => setMessageStats(data));
+
+                const fetchData = async () => {
+                    try {
+                        const [statusRes, usersRes, adminsRes, bannedRes, logsRes, statsRes] = await Promise.all([
+                            axios.get('/api/status').catch(() => ({ data: { startTime: Date.now() } })),
+                            axios.get('/api/users').catch(() => ({ data: [] })),
+                            axios.get('/api/admins').catch(() => ({ data: [] })),
+                            axios.get('/api/banned').catch(() => ({ data: [] })),
+                            axios.get('/api/logs').catch(() => ({ data: [] })),
+                            axios.get('/api/message-stats').catch(() => ({ data: { today: 0, hourly: [], peak: 0 } }))
+                        ]);
+                        setStatus(statusRes.data);
+                        setUsers(usersRes.data);
+                        setAdmins(adminsRes.data);
+                        setBanned(bannedRes.data);
+                        setLogs(logsRes.data);
+                        setMessageStats(statsRes.data);
+                        updateCharts(statusRes.data);
+                    } catch (error) {
+                        console.error('Error:', error);
+                    }
+                };
+                
+                fetchData();
+                const dataInterval = setInterval(fetchData, 2000);
+
+                return () => {
+                    clearInterval(timeInterval);
+                    clearInterval(dataInterval);
+                    socket.disconnect();
+                };
+            }, []);
+
+            const updateCharts = (data) => {
+                if (messageChartRef.current) messageChartRef.current.destroy();
+                if (userChartRef.current) userChartRef.current.destroy();
+                if (activityChartRef.current) activityChartRef.current.destroy();
+
+                const ctxMessages = document.getElementById('messageChart')?.getContext('2d');
+                if (ctxMessages) {
+                    messageChartRef.current = new Chart(ctxMessages, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['Today', 'This Hour', 'Peak Hour'],
+                            datasets: [{
+                                data: [messageStats.today || 0, messageStats.hourly[new Date().getHours()] || 0, messageStats.peak || 0],
+                                backgroundColor: [
+                                    'rgba(34, 197, 94, 0.8)',
+                                    'rgba(59, 130, 246, 0.8)',
+                                    'rgba(147, 51, 234, 0.8)'
+                                ],
+                                borderColor: [
+                                    'rgba(34, 197, 94, 1)',
+                                    'rgba(59, 130, 246, 1)',
+                                    'rgba(147, 51, 234, 1)'
+                                ],
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            cutout: '65%',
+                            plugins: {
+                                legend: { 
+                                    display: true,
+                                    position: 'bottom',
+                                    labels: { color: '#9ca3af', font: { size: 12 } }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                const ctxUsers = document.getElementById('userChart')?.getContext('2d');
+                if (ctxUsers) {
+                    userChartRef.current = new Chart(ctxUsers, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Active Users', 'Admins', 'Banned Users'],
+                            datasets: [{
+                                data: [data.users || 0, data.admins || 0, data.banned || 0],
+                                backgroundColor: [
+                                    'rgba(59, 130, 246, 0.8)',
+                                    'rgba(245, 158, 11, 0.8)',
+                                    'rgba(239, 68, 68, 0.8)'
+                                ],
+                                borderColor: [
+                                    'rgba(59, 130, 246, 1)',
+                                    'rgba(245, 158, 11, 1)',
+                                    'rgba(239, 68, 68, 1)'
+                                ],
+                                borderWidth: 2,
+                                borderRadius: 8
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: { 
+                                    beginAtZero: true,
+                                    grid: { color: 'rgba(255,255,255,0.1)' },
+                                    ticks: { color: '#9ca3af' }
+                                },
+                                x: { 
+                                    grid: { display: false },
+                                    ticks: { color: '#9ca3af' }
+                                }
+                            },
+                            plugins: { legend: { display: false } }
+                        }
+                    });
+                }
+
+                const ctxActivity = document.getElementById('activityChart')?.getContext('2d');
+                if (ctxActivity) {
+                    const hourlyData = messageStats.hourly || new Array(24).fill(0);
+                    activityChartRef.current = new Chart(ctxActivity, {
+                        type: 'line',
+                        data: {
+                            labels: Array.from({length: 24}, (_, i) => `${i}:00`),
+                            datasets: [{
+                                label: 'Messages per Hour',
+                                data: hourlyData,
+                                borderColor: 'rgba(34, 197, 94, 1)',
+                                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                                fill: true,
+                                tension: 0.4,
+                                pointBackgroundColor: 'rgba(34, 197, 94, 1)',
+                                pointBorderColor: '#ffffff',
+                                pointBorderWidth: 2,
+                                pointRadius: 4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            scales: {
+                                y: { 
+                                    beginAtZero: true,
+                                    grid: { color: 'rgba(255,255,255,0.1)' },
+                                    ticks: { color: '#9ca3af' }
+                                },
+                                x: { 
+                                    grid: { color: 'rgba(255,255,255,0.05)' },
+                                    ticks: { color: '#9ca3af' }
+                                }
+                            },
+                            plugins: { legend: { display: false } }
+                        }
+                    });
+                }
+            };
+
+            const tabs = [
+                { id: 'status', label: 'Status', icon: '●', color: 'text-green-400' },
+                { id: 'users', label: 'Users', icon: '👥', color: 'text-blue-400' },
+                { id: 'admins', label: 'Admins', icon: '⚡', color: 'text-yellow-400' },
+                { id: 'banned', label: 'Banned', icon: '🚫', color: 'text-red-400' },
+                { id: 'logs', label: 'Logs', icon: '📊', color: 'text-purple-400' }
+            ];
+
+            const getConnectionStatus = () => {
+                return status.connection === 'online' ? 
+                    { status: 'Online', color: 'text-green-400', bg: 'bg-green-400' } :
+                    { status: 'Offline', color: 'text-red-400', bg: 'bg-red-400' };
+            };
+
+            const connStatus = getConnectionStatus();
+
+            return (
+                <div className="min-h-screen relative">
+                    <div className="fixed inset-0 bg-gradient-to-br from-blue-900/20 via-purple-900/20 to-green-900/20 pointer-events-none"></div>
+                    
+                    <header className="relative z-10 glass-strong border-b border-white/20">
+                        <div className="container mx-auto px-4 sm:px-6 py-4">
+                            <div className="flex justify-between items-center">
+                                <div className="flex items-center space-x-4">
+                                    <div className="hexagon w-12 h-12 bg-gradient-to-r from-green-400 to-blue-500 flex items-center justify-center glow">
+                                        <span className="text-white font-bold text-lg">WA</span>
+                                    </div>
+                                    <div>
+                                        <h1 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
+                                            WhatsApp Bot
+                                        </h1>
+                                        <div className="flex items-center space-x-2">
+                                            <span className="text-xs sm:text-sm text-gray-400">Dashboard</span>
+                                            <div className={`w-2 h-2 rounded-full ${connStatus.bg} real-time-indicator`}></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xs sm:text-sm text-gray-400">{currentTime.toLocaleDateString()}</div>
+                                    <div className="text-sm sm:text-lg font-mono">{currentTime.toLocaleTimeString()}</div>
+                                </div>
+                                <button 
+                                    className="md:hidden p-2 glass rounded-lg"
+                                    onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                                >
+                                    <div className="w-6 h-6 flex flex-col justify-center space-y-1">
+                                        <div className="w-full h-0.5 bg-white"></div>
+                                        <div className="w-full h-0.5 bg-white"></div>
+                                        <div className="w-full h-0.5 bg-white"></div>
+                                    </div>
+                                </button>
+                            </div>
+                        </div>
+                    </header>
+
+                    <nav className="relative z-10 desktop-nav glass border-b border-white/10">
+                        <div className="container mx-auto px-4 sm:px-6">
+                            <div className="flex space-x-1 relative overflow-x-auto">
+                                {tabs.map((tab, index) => (
+                                    <button
+                                        key={tab.id}
+                                        className={`px-4 sm:px-6 py-4 font-medium transition-all duration-300 flex items-center space-x-2 whitespace-nowrap ${
+                                            activeTab === tab.id 
+                                                ? tab.color
+                                                : 'text-gray-400 hover:text-white'
+                                        }`}
+                                        onClick={() => setActiveTab(tab.id)}
+                                    >
+                                        <span>{tab.icon}</span>
+                                        <span className="hidden sm:inline">{tab.label}</span>
+                                    </button>
+                                ))}
+                                <div 
+                                    className="tab-indicator"
+                                    style={{
+                                        width: `${100 / tabs.length}%`,
+                                        left: `${tabs.findIndex(tab => tab.id === activeTab) * (100 / tabs.length)}%`
+                                    }}
+                                ></div>
+                            </div>
+                        </div>
+                    </nav>
+
+                    <div className={`mobile-nav glass border-b border-white/10 ${mobileMenuOpen ? 'open' : ''} mobile-menu`}>
+                        <div className="container mx-auto px-4 py-2">
+                            <div className="grid grid-cols-5 gap-2">
+                                {tabs.map((tab) => (
+                                    <button
+                                        key={tab.id}
+                                        className={`p-3 rounded-lg font-medium transition-all duration-300 flex flex-col items-center space-y-1 ${
+                                            activeTab === tab.id 
+                                                ? `${tab.color} glass-strong` 
+                                                : 'text-gray-400 hover:text-white hover:glass'
+                                        }`}
+                                        onClick={() => {
+                                            setActiveTab(tab.id);
+                                            setMobileMenuOpen(false);
+                                        }}
+                                    >
+                                        <span className="text-lg">{tab.icon}</span>
+                                        <span className="text-xs">{tab.label}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+
+                    <main className="relative z-10 container mx-auto px-4 sm:px-6 py-6 sm:py-8">
+                        <div className="slide-up">
+                            {activeTab === 'status' && (
+                                <div className="space-y-6 sm:space-y-8">
+                                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
+                                        <div className="stat-card glass-strong rounded-2xl p-4 sm:p-6 floating glow">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className="diamond w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-r from-green-400 to-green-600"></div>
+                                                <div className={`status-dot w-3 h-3 ${connStatus.bg} rounded-full`}></div>
+                                            </div>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Connection</p>
+                                            <p className={`text-lg sm:text-2xl font-bold ${connStatus.color}`}>{connStatus.status}</p>
+                                        </div>
+
+                                        <div className="stat-card glass-strong rounded-2xl p-4 sm:p-6 floating glow-blue" style={{animationDelay: '0.1s'}}>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className="diamond w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-r from-blue-400 to-blue-600"></div>
+                                                <div className="pulse w-3 h-3 bg-blue-400 rounded-full"></div>
+                                            </div>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Messages</p>
+                                            <p className="text-lg sm:text-2xl font-bold text-blue-400">{status.messages || 0}</p>
+                                            <div className="progress-bar mt-2">
+                                                <div className="progress-fill" style={{width: `${Math.min((status.messages || 0) / 10, 100)}%`}}></div>
+                                            </div>
+                                        </div>
+
+                                        <div className="stat-card glass-strong rounded-2xl p-4 sm:p-6 floating glow-purple" style={{animationDelay: '0.2s'}}>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className="diamond w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-r from-purple-400 to-purple-600"></div>
+                                                <div className="pulse w-3 h-3 bg-purple-400 rounded-full"></div>
+                                            </div>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Users</p>
+                                            <p className="text-lg sm:text-2xl font-bold text-purple-400">{status.users || 0}</p>
+                                        </div>
+
+                                        <div className="stat-card glass-strong rounded-2xl p-4 sm:p-6 floating" style={{animationDelay: '0.3s'}}>
+                                            <div className="flex items-center justify-between mb-4">
+                                                <div className="diamond w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-r from-orange-400 to-red-600"></div>
+                                                <div className="pulse w-3 h-3 bg-orange-400 rounded-full"></div>
+                                            </div>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Uptime</p>
+                                            <p className="text-sm sm:text-xl font-bold text-orange-400">{formatUptime(status.startTime)}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 sm:gap-8">
+                                        <div className="chart-container glass-strong rounded-2xl">
+                                            <h3 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
+                                                Message Distribution
+                                            </h3>
+                                            <div className="h-48 sm:h-64 relative">
+                                                <canvas id="messageChart"></canvas>
+                                            </div>
+                                        </div>
+
+                                        <div className="chart-container glass-strong rounded-2xl">
+                                            <h3 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                                                User Statistics
+                                            </h3>
+                                            <div className="h-48 sm:h-64">
+                                                <canvas id="userChart"></canvas>
+                                            </div>
+                                        </div>
+
+                                        <div className="chart-container glass-strong rounded-2xl">
+                                            <h3 className="text-lg sm:text-xl font-bold mb-4 sm:mb-6 bg-gradient-to-r from-green-400 to-cyan-500 bg-clip-text text-transparent">
+                                                24H Activity
+                                            </h3>
+                                            <div className="h-48 sm:h-64">
+                                                <canvas id="activityChart"></canvas>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                                        <div className="glass-strong rounded-xl p-3 sm:p-4 text-center slide-in-right">
+                                            <p className="text-gray-400 text-xs sm:text-sm">Memory</p>
+                                            <p className="text-sm sm:text-lg font-bold">{status.memory || 'N/A'}</p>
+                                        </div>
+                                        <div className="glass-strong rounded-xl p-3 sm:p-4 text-center slide-in-right" style={{animationDelay: '0.1s'}}>
+                                            <p className="text-gray-400 text-xs sm:text-sm">CPU Cores</p>
+                                            <p className="text-sm sm:text-lg font-bold">{status.cpuCores || 'N/A'}</p>
+                                        </div>
+                                        <div className="glass-strong rounded-xl p-3 sm:p-4 text-center slide-in-right" style={{animationDelay: '0.2s'}}>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Admins</p>
+                                            <p className="text-sm sm:text-lg font-bold text-yellow-400">{status.admins || 0}</p>
+                                        </div>
+                                        <div className="glass-strong rounded-xl p-3 sm:p-4 text-center slide-in-right" style={{animationDelay: '0.3s'}}>
+                                            <p className="text-gray-400 text-xs sm:text-sm">Banned</p>
+                                            <p className="text-sm sm:text-lg font-bold text-red-400">{status.banned || 0}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'users' && (
+                                <div className="glass-strong rounded-2xl p-4 sm:p-6">
+                                    <div className="flex items-center justify-between mb-4 sm:mb-6">
+                                        <h2 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                                            Active Users
+                                        </h2>
+                                        <div className="glass rounded-lg px-3 py-1">
+                                            <span className="text-sm text-gray-400">Total: </span>
+                                            <span className="text-sm font-bold text-blue-400">{users.length}</span>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 max-h-96 overflow-y-auto">
+                                        {users.map((user, index) => (
+                                            <div key={user.id} className="glass rounded-xl p-3 sm:p-4 slide-up hover:glass-strong transition-all duration-300" style={{animationDelay: `${index * 0.05}s`}}>
+                                                <div className="flex items-center space-x-3">
+                                                    <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-gradient-to-r from-blue-400 to-purple-500 flex items-center justify-center text-white font-bold text-sm">
+                                                        {(user.name || 'U').charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="font-medium text-sm sm:text-base truncate">{user.name || 'Unknown User'}</p>
+                                                        <div className="flex items-center space-x-2">
+                                                            <p className="text-xs sm:text-sm text-gray-400">{user.messageCount || 0} messages</p>
+                                                            {user.isActive && <div className="w-2 h-2 bg-green-400 rounded-full pulse"></div>}
+                                                        </div>
+                                                    </div>
+                                                    {user.isAdmin && <span className="text-yellow-400 text-lg">⚡</span>}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'admins' && (
+                                <div className="glass-strong rounded-2xl p-4 sm:p-6">
+                                    <div className="flex items-center justify-between mb-4 sm:mb-6">
+                                        <h2 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-yellow-400 to-orange-500 bg-clip-text text-transparent">
+                                            Bot Administrators
+                                        </h2>
+                                        <div className="glass rounded-lg px-3 py-1">
+                                            <span className="text-sm text-gray-400">Total: </span>
+                                            <span className="text-sm font-bold text-yellow-400">{admins.length}</span>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
+                                        {admins.map((admin, index) => (
+                                            <div key={admin.id} className="glass rounded-xl p-4 slide-up glow hover:glass-strong transition-all duration-300" style={{animationDelay: `${index * 0.1}s`}}>
+                                                <div className="flex items-center space-x-3">
+                                                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-r from-yellow-400 to-orange-500 flex items-center justify-center text-white font-bold">
+                                                        ⚡
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="font-bold text-yellow-400 text-sm sm:text-base truncate">{admin.name || 'Admin'}</p>
+                                                        <p className="text-xs sm:text-sm text-gray-400 truncate">{admin.id}</p>
+                                                        <div className="flex items-center space-x-2 mt-1">
+                                                            <span className="text-xs bg-yellow-900/30 text-yellow-400 px-2 py-1 rounded">Super Admin</span>
+                                                            <div className="w-2 h-2 bg-green-400 rounded-full status-dot"></div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'banned' && (
+                                <div className="glass-strong rounded-2xl p-4 sm:p-6">
+                                    <div className="flex items-center justify-between mb-4 sm:mb-6">
+                                        <h2 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-red-400 to-orange-500 bg-clip-text text-transparent">
+                                            Banned Users
+                                        </h2>
+                                        <div className="glass rounded-lg px-3 py-1">
+                                            <span className="text-sm text-gray-400">Total: </span>
+                                            <span className="text-sm font-bold text-red-400">{banned.length}</span>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4 max-h-96 overflow-y-auto">
+                                        {banned.map((user, index) => (
+                                            <div key={user.id} className="glass rounded-xl p-4 slide-up hover:glass-strong transition-all duration-300" style={{animationDelay: `${index * 0.1}s`}}>
+                                                <div className="flex items-center space-x-3">
+                                                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full bg-gradient-to-r from-red-400 to-red-600 flex items-center justify-center text-white font-bold">
+                                                        🚫
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className="font-medium text-red-400 text-sm sm:text-base truncate">{user.name || 'Banned User'}</p>
+                                                        <p className="text-xs sm:text-sm text-gray-400 truncate">{user.id}</p>
+                                                        <div className="flex items-center space-x-2 mt-1">
+                                                            <span className="text-xs bg-red-900/30 text-red-400 px-2 py-1 rounded">
+                                                                {user.reason || 'Violation'}
+                                                            </span>
+                                                            <span className="text-xs text-gray-500">
+                                                                {user.bannedAt ? new Date(user.bannedAt).toLocaleDateString() : 'N/A'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'logs' && (
+                                <div className="glass-strong rounded-2xl p-4 sm:p-6">
+                                    <div className="flex items-center justify-between mb-4 sm:mb-6">
+                                        <h2 className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent">
+                                            System Logs
+                                        </h2>
+                                        <div className="flex items-center space-x-2">
+                                            <div className="w-2 h-2 bg-green-400 rounded-full real-time-indicator"></div>
+                                            <span className="text-xs text-gray-400">Live</span>
+                                        </div>
+                                    </div>
+                                    <div className="glass rounded-xl p-4 h-80 sm:h-96 overflow-y-auto space-y-1">
+                                        {logs.length === 0 ? (
+                                            <div className="flex items-center justify-center h-full text-gray-400">
+                                                <div className="text-center">
+                                                    <div className="text-4xl mb-2">📝</div>
+                                                    <p>No logs available</p>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            logs.map((log, index) => (
+                                                <div key={log.id || index} className={`log-item ${log.type?.toLowerCase() || 'info'} fade-in`} style={{animationDelay: `${index * 0.02}s`}}>
+                                                    <div className="flex items-start space-x-3">
+                                                        <div className={`w-2 h-2 rounded-full mt-2 flex-shrink-0 ${
+                                                            log.type === 'ERROR' ? 'bg-red-400 pulse' :
+                                                            log.type === 'WARNING' ? 'bg-yellow-400 pulse' : 'bg-green-400'
+                                                        }`}></div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center space-x-2 mb-1">
+                                                                <span className="text-xs text-gray-400 font-mono">{log.timestamp}</span>
+                                                                <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                                                    log.type === 'ERROR' ? 'bg-red-900/30 text-red-400' :
+                                                                    log.type === 'WARNING' ? 'bg-yellow-900/30 text-yellow-400' : 
+                                                                    'bg-green-900/30 text-green-400'
+                                                                }`}>
+                                                                    {log.type || 'INFO'}
+                                                                </span>
+                                                                {log.source && (
+                                                                    <span className="text-xs bg-blue-900/30 text-blue-400 px-2 py-1 rounded-full">
+                                                                        {log.source}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-sm text-gray-300 break-words">{log.message}</p>
+                                                            {log.details && (
+                                                                <p className="text-xs text-gray-500 mt-1 font-mono">{log.details}</p>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

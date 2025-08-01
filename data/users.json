@@ -1,0 +1,35 @@
+{
+  "6285185161613": {
+    "id": "6285185161613",
+    "name": "Revy",
+    "firstSeen": "2025-07-31T13:52:26.881Z",
+    "lastSeen": "2025-07-31T14:32:32.318Z",
+    "messageCount": 7,
+    "isAdmin": true,
+    "totalCommands": 7,
+    "warnings": 0,
+    "isBanned": false
+  },
+  "6281227444729": {
+    "id": "6281227444729",
+    "name": "r",
+    "firstSeen": "2025-07-31T13:54:29.781Z",
+    "lastSeen": "2025-07-31T14:19:22.305Z",
+    "messageCount": 2,
+    "isAdmin": true,
+    "totalCommands": 2,
+    "warnings": 0,
+    "isBanned": false
+  },
+  "6283178399486": {
+    "id": "6283178399486",
+    "name": "Yonn",
+    "firstSeen": "2025-07-31T14:09:25.351Z",
+    "lastSeen": "2025-07-31T14:09:25.351Z",
+    "messageCount": 1,
+    "isAdmin": false,
+    "totalCommands": 0,
+    "warnings": 0,
+    "isBanned": false
+  }
+}

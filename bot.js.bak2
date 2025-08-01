@@ -1,0 +1,1310 @@
+const { Client, LocalAuth, NoAuth } = require('whatsapp-web.js');
+const qrcode = require('qrcode-terminal');
+const chalk = require('chalk');
+const fs = require('fs-extra');
+const path = require('path');
+const readline = require('readline');
+const chokidar = require('chokidar');
+const os = require('os');
+const { v4: uuidv4 } = require('uuid');
+const cluster = require('cluster');
+const EventEmitter = require('events');
+const cron = require('node-cron');
+const moment = require('moment');
+const axios = require('axios');
+const express = require('express');
+const compression = require('compression');
+const helmet = require('helmet');
+
+class WABot extends EventEmitter {
+    constructor() {
+        super();
+        this.setMaxListeners(50);
+        this.startTime = Date.now();
+        this.users = new Map();
+        this.admins = new Set();
+        this.messageCount = 0;
+        this.sessionId = this.generateSessionId();
+        this.logFile = path.join(__dirname, 'logs', `session_${this.sessionId}.log`);
+        this.terminalMode = 'normal';
+        this.pendingAdminAdd = null;
+        this.pendingAdminRemove = null;
+        this.watcher = null;
+        this.isReloading = false;
+        this.messageQueue = [];
+        this.isProcessingQueue = false;
+        this.rateLimits = new Map();
+        this.cooldowns = new Map();
+        this.scheduledMessages = new Map();
+        this.dataDir = path.join(__dirname, 'data');
+        this.adminsFile = path.join(this.dataDir, 'admins.json');
+        this.usersFile = path.join(this.dataDir, 'users.json');
+        this.scheduledMessagesFile = path.join(this.dataDir, 'scheduled.json');
+        this.configFile = path.join(this.dataDir, 'config.json');
+        this.loginMethod = 'qr';
+        this.phoneNumber = null;
+        this.pairingCode = null;
+        this.isAuthenticated = false;
+        this.restartInProgress = false;
+        this.modules = new Map();
+        this.config = {};
+        this.messageStats = { sent: 0, received: 0, commands: 0, errors: 0 };
+        this.performanceMetrics = { avgResponseTime: 0, totalRequests: 0 };
+        this.webServer = null;
+        this.apiPort = 3000;
+        this.allowSelfCommands = true;
+        this.antiSpam = { enabled: true, maxMessages: 15, timeWindow: 60000, banDuration: 300000 };
+        this.autoReply = { enabled: true, responses: new Map() };
+        this.groupSettings = new Map();
+        this.userSessions = new Map();
+        this.botNumber = null;
+        
+        this.setupDataDir();
+        this.loadConfig();
+        this.loadPersistentData();
+        this.setupLogger();
+        this.createClient();
+        this.setupEventHandlers();
+        this.loadModules();
+        this.setupWatcher();
+        this.setupTerminalCommands();
+        this.setupProgressAnimation();
+        this.setupRateLimit();
+        this.setupMessageScheduler();
+        this.setupTypingSimulation();
+        this.setupWebServer();
+        this.setupCronJobs();
+        this.setupPerformanceMonitoring();
+    }
+
+    generateSessionId() {
+        return moment().format('YYYYMMDD_HHmmss');
+    }
+
+    async setupDataDir() {
+        await fs.ensureDir(this.dataDir);
+        await fs.ensureDir(path.join(__dirname, 'logs'));
+        await fs.ensureDir(path.join(__dirname, 'modules'));
+        await fs.ensureDir(path.join(__dirname, 'temp'));
+    }
+
+    loadConfig() {
+        try {
+            if (fs.existsSync(this.configFile)) {
+                this.config = fs.readJsonSync(this.configFile);
+            } else {
+                this.config = {
+                    maxConcurrentMessages: 10,
+                    messageDelay: 500,
+                    rateLimitMax: 20,
+                    rateLimitWindow: 60000,
+                    cooldownPeriod: 300000,
+                    typingDelayMin: 300,
+                    typingDelayMax: 1500,
+                    allowSelfCommands: true,
+                    webServerEnabled: true,
+                    apiPort: 3000,
+                    autoSaveInterval: 30000,
+                    logLevel: 'INFO',
+                    enablePerformanceMonitoring: true
+                };
+                this.saveConfig();
+            }
+            Object.assign(this, this.config);
+        } catch (error) {
+            this.log(`Error loading config: ${error.message}`, 'ERROR');
+        }
+    }
+
+    saveConfig() {
+        try {
+            fs.writeJsonSync(this.configFile, this.config, { spaces: 2 });
+        } catch (error) {
+            this.log(`Error saving config: ${error.message}`, 'ERROR');
+        }
+    }
+
+    async loadPersistentData() {
+        try {
+            if (await fs.pathExists(this.adminsFile)) {
+                const admins = await fs.readJson(this.adminsFile);
+                this.admins = new Set(admins);
+            }
+            
+            if (await fs.pathExists(this.usersFile)) {
+                const users = await fs.readJson(this.usersFile);
+                this.users = new Map(Object.entries(users).map(([k, v]) => [k, {
+                    ...v,
+                    firstSeen: new Date(v.firstSeen),
+                    lastSeen: new Date(v.lastSeen || Date.now())
+                }]));
+            }
+            
+            if (await fs.pathExists(this.scheduledMessagesFile)) {
+                const scheduled = await fs.readJson(this.scheduledMessagesFile);
+                this.scheduledMessages = new Map(Object.entries(scheduled).map(([k, v]) => [k, {
+                    ...v,
+                    timestamp: new Date(v.timestamp)
+                }]));
+            }
+        } catch (error) {
+            this.log(`Error loading persistent data: ${error.message}`, 'ERROR');
+        }
+    }
+
+    async saveAdmins() {
+        try {
+            await fs.writeJson(this.adminsFile, Array.from(this.admins), { spaces: 2 });
+        } catch (error) {
+            this.log(`Error saving admins: ${error.message}`, 'ERROR');
+        }
+    }
+
+    async saveUsers() {
+        try {
+            const usersObj = Object.fromEntries(this.users);
+            await fs.writeJson(this.usersFile, usersObj, { spaces: 2 });
+        } catch (error) {
+            this.log(`Error saving users: ${error.message}`, 'ERROR');
+        }
+    }
+
+    async saveScheduledMessages() {
+        try {
+            const scheduledObj = Object.fromEntries(this.scheduledMessages);
+            await fs.writeJson(this.scheduledMessagesFile, scheduledObj, { spaces: 2 });
+        } catch (error) {
+            this.log(`Error saving scheduled messages: ${error.message}`, 'ERROR');
+        }
+    }
+
+    setupLogger() {
+        this.logLevels = { ERROR: 0, WARNING: 1, INFO: 2, DEBUG: 3 };
+        this.currentLogLevel = this.logLevels[this.config.logLevel] || 2;
+    }
+
+    log(message, type = 'INFO') {
+        if (this.logLevels[type] <= this.currentLogLevel) {
+            const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
+            const logEntry = `[${timestamp}] [${type}] ${message}\n`;
+            fs.appendFile(this.logFile, logEntry).catch(() => {});
+            this.emit('log', { timestamp, type, message });
+        }
+    }
+
+    createClient() {
+        const authStrategy = this.loginMethod === 'phone' ? new NoAuth() : new LocalAuth({ 
+            clientId: 'WhatsApp-bot-v2', 
+            dataPath: './session' 
+        });
+
+        this.client = new Client({
+            authStrategy: authStrategy,
+            puppeteer: {
+                headless: true,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor',
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding'
+                ],
+                executablePath: this.getChromePath()
+            },
+            userAgent: this.getSystemUserAgent(),
+            restartOnAuthFail: true,
+            qrMaxRetries: 3,
+            takeoverOnConflict: true,
+            takeoverTimeoutMs: 10000
+        });
+    }
+
+    getChromePath() {
+        const paths = [
+            process.env.CHROME_BIN,
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/usr/bin/google-chrome',
+            '/usr/bin/google-chrome-stable',
+            '/opt/google/chrome/chrome',
+            '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+            'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+            'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+        ];
+        
+        for (const chromePath of paths) {
+            if (chromePath && fs.existsSync(chromePath)) {
+                this.log(`Using Chrome: ${chromePath}`);
+                return chromePath;
+            }
+        }
+        return undefined;
+    }
+
+    getSystemUserAgent() {
+        const platform = os.platform();
+        const userAgents = {
+            win32: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            darwin: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            linux: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        };
+        return userAgents[platform] || userAgents.linux;
+    }
+
+    setupProgressAnimation() {
+        const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let i = 0;
+        this.progressInterval = setInterval(() => {
+            if (!this.isAuthenticated) {
+                process.stdout.write(`\r${chalk.cyan(frames[i++ % frames.length])} Initializing WhatsApp Bot...`);
+            }
+        }, 100);
+    }
+
+    setupRateLimit() {
+        this.rateLimitWindow = this.config.rateLimitWindow;
+        this.rateLimitMax = this.config.rateLimitMax;
+        this.cooldownPeriod = this.config.cooldownPeriod;
+        this.messageDelay = this.config.messageDelay;
+    }
+
+    setupMessageScheduler() {
+        cron.schedule('* * * * *', async () => {
+            const now = Date.now();
+            for (const [id, { recipient, message, timestamp }] of this.scheduledMessages) {
+                if (timestamp.getTime() <= now) {
+                    try {
+                        await this.client.sendMessage(recipient, message);
+                        this.scheduledMessages.delete(id);
+                        await this.saveScheduledMessages();
+                        this.log(`Scheduled message sent to ${recipient}`);
+                        this.messageStats.sent++;
+                    } catch (error) {
+                        this.log(`Error sending scheduled message: ${error.message}`, 'ERROR');
+                        this.messageStats.errors++;
+                    }
+                }
+            }
+        });
+    }
+
+    setupTypingSimulation() {
+        this.typingDelayMin = this.config.typingDelayMin;
+        this.typingDelayMax = this.config.typingDelayMax;
+    }
+
+    async simulateTyping(chat, message = '') {
+        const typingTime = Math.min(
+            Math.max(message.length * 50, this.typingDelayMin),
+            this.typingDelayMax
+        );
+        await chat.sendStateTyping();
+        await new Promise(resolve => setTimeout(resolve, typingTime));
+    }
+
+    setupWebServer() {
+        if (!this.config.webServerEnabled) return;
+        
+        this.app = express();
+        this.app.use(helmet());
+        this.app.use(compression());
+        this.app.use(express.json({ limit: '10mb' }));
+        this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+        this.app.get('/api/status', (req, res) => {
+            res.json({
+                status: this.isAuthenticated ? 'connected' : 'disconnected',
+                uptime: Date.now() - this.startTime,
+                users: this.users.size,
+                messages: this.messageCount,
+                modules: this.modules.size,
+                stats: this.messageStats,
+                performance: this.performanceMetrics
+            });
+        });
+
+        this.app.post('/api/send', async (req, res) => {
+            try {
+                const { recipient, message } = req.body;
+                if (!recipient || !message) {
+                    return res.status(400).json({ error: 'Recipient and message required' });
+                }
+                await this.client.sendMessage(recipient, message);
+                this.messageStats.sent++;
+                res.json({ success: true, message: 'Message sent' });
+            } catch (error) {
+                this.messageStats.errors++;
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.get('/api/users', (req, res) => {
+            const users = Array.from(this.users.values()).map(user => ({
+                ...user,
+                isOnline: this.isUserOnline(user.id)
+            }));
+            res.json(users);
+        });
+
+        this.app.get('/api/modules', (req, res) => {
+            const modules = Array.from(this.modules.entries()).map(([name, module]) => ({
+                name,
+                description: module.description,
+                adminOnly: module.adminOnly,
+                enabled: module.enabled !== false
+            }));
+            res.json(modules);
+        });
+
+        this.webServer = this.app.listen(this.apiPort, () => {
+            this.log(`Web server started on port ${this.apiPort}`);
+        });
+    }
+
+    setupCronJobs() {
+        cron.schedule('0 */6 * * *', async () => {
+            await this.cleanupOldData();
+        });
+
+        cron.schedule('*/30 * * * * *', async () => {
+            await this.saveUsers();
+            await this.saveScheduledMessages();
+        });
+
+        cron.schedule('0 0 * * *', async () => {
+            this.generateDailyReport();
+        });
+    }
+
+    setupPerformanceMonitoring() {
+        if (!this.config.enablePerformanceMonitoring) return;
+        
+        setInterval(() => {
+            const usage = process.memoryUsage();
+            const cpuUsage = process.cpuUsage();
+            
+            this.emit('performance', {
+                memory: {
+                    rss: Math.round(usage.rss / 1024 / 1024),
+                    heapUsed: Math.round(usage.heapUsed / 1024 / 1024),
+                    heapTotal: Math.round(usage.heapTotal / 1024 / 1024)
+                },
+                cpu: cpuUsage,
+                uptime: process.uptime(),
+                activeConnections: this.userSessions.size
+            });
+        }, 60000);
+    }
+
+    async cleanupOldData() {
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        let cleaned = 0;
+        
+        for (const [userId, user] of this.users) {
+            if (user.lastSeen < thirtyDaysAgo && !user.isAdmin) {
+                this.users.delete(userId);
+                cleaned++;
+            }
+        }
+        
+        if (cleaned > 0) {
+            this.log(`Cleaned up ${cleaned} old user records`);
+            await this.saveUsers();
+        }
+    }
+
+    generateDailyReport() {
+        const report = {
+            date: moment().format('YYYY-MM-DD'),
+            totalUsers: this.users.size,
+            totalMessages: this.messageCount,
+            newUsers: Array.from(this.users.values()).filter(u => 
+                moment(u.firstSeen).isSame(moment(), 'day')
+            ).length,
+            activeUsers: Array.from(this.users.values()).filter(u => 
+                moment(u.lastSeen).isAfter(moment().subtract(1, 'day'))
+            ).length,
+            stats: { ...this.messageStats }
+        };
+        
+        this.log(`Daily Report: ${JSON.stringify(report)}`);
+        this.emit('dailyReport', report);
+    }
+
+    isUserOnline(userId) {
+        return this.userSessions.has(userId) && 
+               Date.now() - this.userSessions.get(userId) < 300000;
+    }
+
+    async checkRateLimit(userId) {
+        const now = Date.now();
+        
+        if (this.cooldowns.has(userId)) {
+            const cooldownEnd = this.cooldowns.get(userId);
+            if (now < cooldownEnd) return false;
+            this.cooldowns.delete(userId);
+        }
+
+        const userLimit = this.rateLimits.get(userId) || { count: 0, start: now };
+        
+        if (now - userLimit.start > this.rateLimitWindow) {
+            userLimit.count = 0;
+            userLimit.start = now;
+        }
+
+        userLimit.count++;
+        this.rateLimits.set(userId, userLimit);
+
+        if (userLimit.count > this.rateLimitMax) {
+            this.cooldowns.set(userId, now + this.cooldownPeriod);
+            this.log(`Rate limit exceeded for ${userId}`, 'WARNING');
+            return false;
+        }
+
+        return true;
+    }
+
+    async requestPairingCode(phoneNumber) {
+        try {
+            const code = await this.client.requestPairingCode(phoneNumber);
+            this.log(`Pairing code requested for ${phoneNumber}: ${code}`);
+            return code;
+        } catch (error) {
+            this.log(`Error requesting pairing code: ${error.message}`, 'ERROR');
+            throw error;
+        }
+    }
+
+    setupEventHandlers() {
+        this.client.on('qr', (qr) => {
+            if (this.loginMethod === 'qr') {
+                clearInterval(this.progressInterval);
+                console.clear();
+                this.showHeader();
+                console.log(chalk.yellow('📱 Scan QR Code to login'));
+                qrcode.generate(qr, { small: true });
+                console.log(chalk.gray('Press ENTER to refresh QR or type "phone" for phone login'));
+                this.log('QR Code generated');
+            }
+        });
+
+        this.client.on('authenticated', () => {
+            this.isAuthenticated = true;
+            this.log('Authentication successful');
+        });
+
+        this.client.on('ready', async () => {
+            clearInterval(this.progressInterval);
+            console.clear();
+            this.showHeader();
+            
+            const info = this.client.info;
+            this.botNumber = info.wid.user;
+            
+            console.log(chalk.green('✅ Bot successfully connected'));
+            console.log(chalk.cyan(`👤 Logged in as: ${info.pushname}`));
+            console.log(chalk.cyan(`📞 Number: ${info.wid.user}`));
+            console.log(chalk.yellow('🚀 Bot is ready to receive messages'));
+            console.log(chalk.gray('Type "h" for terminal help'));
+            
+            this.log(`Bot connected as ${info.pushname} (${info.wid.user})`);
+            this.admins.add(info.wid.user);
+            await this.saveAdmins();
+            this.startStatusUpdates();
+            this.isAuthenticated = true;
+            this.emit('ready');
+        });
+
+        this.client.on('message', async (message) => {
+            if (message.type === 'ciphertext' || message.type === 'protocol') return;
+            
+            this.messageQueue.push(message);
+            this.messageStats.received++;
+            
+            const contact = await message.getContact();
+            this.userSessions.set(contact.id.user, Date.now());
+            
+            if (!this.isProcessingQueue) {
+                this.startMessageQueue();
+            }
+        });
+
+        this.client.on('message_create', async (message) => {
+            if (message.fromMe && this.allowSelfCommands) {
+                const isCommand = message.body.startsWith('.');
+                if (isCommand) {
+                    this.messageQueue.push(message);
+                    if (!this.isProcessingQueue) {
+                        this.startMessageQueue();
+                    }
+                }
+            }
+        });
+
+        this.client.on('disconnected', (reason) => {
+            this.log(`Bot disconnected: ${reason}`, 'ERROR');
+            console.log(chalk.red('⚠️ Bot disconnected:', reason));
+            this.isAuthenticated = false;
+            this.emit('disconnected', reason);
+            if (!this.restartInProgress) {
+                this.restart();
+            }
+        });
+
+        this.client.on('auth_failure', (msg) => {
+            this.log(`Authentication failure: ${msg}`, 'ERROR');
+            console.log(chalk.red('❌ Authentication failure:', msg));
+            this.isAuthenticated = false;
+            this.emit('authFailure', msg);
+        });
+
+        this.client.on('group_join', async (notification) => {
+            const chat = await notification.getChat();
+            const contact = await notification.getContact();
+            this.log(`User ${contact.pushname} joined group ${chat.name}`);
+        });
+
+        this.client.on('group_leave', async (notification) => {
+            const chat = await notification.getChat();
+            const contact = await notification.getContact();
+            this.log(`User ${contact.pushname} left group ${chat.name}`);
+        });
+    }
+
+    async startMessageQueue() {
+        this.isProcessingQueue = true;
+        const concurrentLimit = this.config.maxConcurrentMessages;
+        
+        while (this.messageQueue.length > 0) {
+            const batch = this.messageQueue.splice(0, concurrentLimit);
+            const promises = batch.map(message => this.handleMessage(message));
+            
+            try {
+                await Promise.allSettled(promises);
+                if (this.messageQueue.length > 0) {
+                    await new Promise(resolve => setTimeout(resolve, this.messageDelay));
+                }
+            } catch (error) {
+                this.log(`Error processing message batch: ${error.message}`, 'ERROR');
+                this.messageStats.errors++;
+            }
+        }
+        
+        this.isProcessingQueue = false;
+    }
+
+    startStatusUpdates() {
+        setInterval(async () => {
+            const uptime = Math.floor((Date.now() - this.startTime) / 1000);
+            const memory = process.memoryUsage();
+            const memUsed = (memory.heapUsed / 1024 / 1024).toFixed(2);
+            
+            process.title = `WA Bot | Users: ${this.users.size} | Msgs: ${this.messageCount} | RAM: ${memUsed}MB | Up: ${uptime}s`;
+            
+            await this.saveUsers();
+            await this.saveScheduledMessages();
+            
+            this.emit('statusUpdate', {
+                uptime,
+                memory: memUsed,
+                users: this.users.size,
+                messages: this.messageCount
+            });
+        }, this.config.autoSaveInterval);
+    }
+
+    showHeader() {
+        console.log(chalk.red('🔴'), chalk.yellow('🟡'), chalk.green('🟢'));
+        console.log(chalk.cyan.bold(`
+██╗    ██╗██╗  ██╗ █████╗ ████████╗███████╗ █████╗ ██████╗ ██████╗ 
+██║    ██║██║  ██║██╔══██╗╚══██╔══╝██╔════╝██╔══██╗██╔══██╗██╔══██╗
+██║ █╗ ██║███████║███████║   ██║   ███████╗███████║██████╔╝██████╔╝
+██║███╗██║██╔══██║██╔══██║   ██║   ╚════██║██╔══██║██╔═══╝ ██╔═══╝ 
+╚███╔███╔╝██║  ██║██║  ██║   ██║   ███████║██║  ██║██║     ██║     
+ ╚══╝╚══╝ ╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝     
+        `));
+        console.log(chalk.gray(moment().format('LLLL')));
+        console.log(chalk.gray('─'.repeat(70)));
+        console.log(chalk.cyan.bold('⚡ WhatsApp Bot Advanced v5.0'));
+        console.log(chalk.gray('─'.repeat(70)));
+    }
+
+    async handleMessage(message) {
+        const startTime = Date.now();
+        
+        try {
+            this.messageCount++;
+            const chat = await message.getChat();
+            const contact = await message.getContact();
+            const userId = contact.id.user;
+            const isCommand = message.body.startsWith('.');
+            const isSelfMessage = message.fromMe;
+
+            if (!this.users.has(userId)) {
+                this.users.set(userId, {
+                    id: userId,
+                    name: contact.pushname || contact.number || 'Unknown',
+                    firstSeen: new Date(),
+                    lastSeen: new Date(),
+                    messageCount: 0,
+                    isAdmin: this.admins.has(userId),
+                    totalCommands: 0,
+                    warnings: 0,
+                    isBanned: false
+                });
+                this.log(`New user: ${contact.pushname || 'Unknown'} (${userId})`);
+            }
+
+            const user = this.users.get(userId);
+            user.messageCount++;
+            user.lastSeen = new Date();
+            user.isAdmin = this.admins.has(userId);
+            user.name = contact.pushname || contact.number || user.name;
+
+            if (user.isBanned && !user.isAdmin) {
+                this.log(`Blocked message from banned user: ${userId}`, 'WARNING');
+                return;
+            }
+
+            const timestamp = moment().format('HH:mm:ss');
+            const prefix = isSelfMessage ? chalk.green('[SELF]') : '';
+            console.log(chalk.blue(`[${timestamp}] ${prefix} ${user.name}: ${message.body.substring(0, 100)}`));
+            this.log(`Message from ${user.name} (${userId}): ${message.body}`);
+
+            if (isCommand) {
+                if (!(await this.checkRateLimit(userId)) && !user.isAdmin) {
+                    this.log(`Rate limit exceeded for ${userId}`, 'WARNING');
+                    return;
+                }
+
+                user.totalCommands++;
+                this.messageStats.commands++;
+
+                await this.simulateTyping(chat, message.body);
+                const [command, ...args] = message.body.slice(1).toLowerCase().split(' ');
+                
+                if (this.modules.has(command)) {
+                    const module = this.modules.get(command);
+                    
+                    if (module.adminOnly && !user.isAdmin) {
+                        await message.reply('🔒 Admin access required');
+                        return;
+                    }
+
+                    if (module.enabled === false) {
+                        await message.reply('⚠️ This command is currently disabled');
+                        return;
+                    }
+
+                    try {
+                        const result = await module.execute(message, args, this.client, this);
+                        this.log(`Command executed: ${command} by ${userId}`);
+                        
+                        if (result && result.success === false) {
+                            await message.reply(result.error || '❌ Command execution failed');
+                        }
+                    } catch (error) {
+                        console.log(chalk.red(`❌ Error executing ${command}:`, error.message));
+                        this.log(`Error executing ${command}: ${error.message}`, 'ERROR');
+                        this.messageStats.errors++;
+                        await message.reply('⚠️ An error occurred while processing your command.');
+                    }
+                } else {
+                    await message.reply('❓ Unknown command. Type *.help* for available commands.');
+                }
+            }
+
+            for (const [name, module] of this.modules) {
+                if (module.autoTrigger && module.autoTrigger(message, user, chat)) {
+                    await this.simulateTyping(chat);
+                    try {
+                        await module.execute(message, [], this.client, this);
+                    } catch (error) {
+                        this.log(`Error in auto trigger ${name}: ${error.message}`, 'ERROR');
+                    }
+                }
+            }
+
+            if (this.autoReply.enabled && this.autoReply.responses.has(message.body.toLowerCase())) {
+                const response = this.autoReply.responses.get(message.body.toLowerCase());
+                await this.simulateTyping(chat);
+                await message.reply(response);
+            }
+
+            const responseTime = Date.now() - startTime;
+            this.updatePerformanceMetrics(responseTime);
+
+        } catch (error) {
+            this.log(`Error handling message: ${error.message}`, 'ERROR');
+            this.messageStats.errors++;
+        }
+    }
+
+    updatePerformanceMetrics(responseTime) {
+        this.performanceMetrics.totalRequests++;
+        this.performanceMetrics.avgResponseTime = 
+            (this.performanceMetrics.avgResponseTime * (this.performanceMetrics.totalRequests - 1) + responseTime) / 
+            this.performanceMetrics.totalRequests;
+    }
+
+    loadModules() {
+        if (this.isReloading) return;
+        this.isReloading = true;
+        
+        const modulesPath = path.join(__dirname, 'modules');
+        const files = fs.readdirSync(modulesPath).filter(file => file.endsWith('.js'));
+        
+        this.modules.clear();
+        
+        for (const file of files) {
+            try {
+                const modulePath = path.join(modulesPath, file);
+                delete require.cache[require.resolve(modulePath)];
+                const module = require(modulePath);
+                
+                if (module.name && module.execute) {
+                    this.modules.set(module.name.toLowerCase(), {
+                        ...module,
+                        enabled: module.enabled !== false,
+                        lastUsed: null,
+                        usageCount: 0
+                    });
+                    console.log(chalk.green(`✅ Loaded: ${module.name}`));
+                    this.log(`Module loaded: ${module.name}`);
+                } else {
+                    console.log(chalk.yellow(`⚠️ Invalid module format: ${file}`));
+                }
+            } catch (error) {
+                console.log(chalk.red(`❌ Error loading ${file}:`, error.message));
+                this.log(`Error loading ${file}: ${error.message}`, 'ERROR');
+            }
+        }
+        
+        setTimeout(() => {
+            this.isReloading = false;
+        }, 1000);
+    }
+
+    setupWatcher() {
+        const modulesPath = path.join(__dirname, 'modules');
+        if (this.watcher) this.watcher.close();
+        
+        this.watcher = chokidar.watch(modulesPath, {
+            ignored: /[\/\\]\./,
+            persistent: true,
+            ignoreInitial: true
+        });
+        
+        this.watcher.on('change', () => {
+            if (!this.isReloading) {
+                console.log(chalk.yellow('🔄 Module changed, reloading...'));
+                this.log('Module files changed, reloading');
+                this.loadModules();
+            }
+        });
+        
+        this.watcher.on('add', () => {
+            if (!this.isReloading) {
+                console.log(chalk.green('➕ New module added'));
+                this.loadModules();
+            }
+        });
+        
+        this.watcher.on('unlink', () => {
+            if (!this.isReloading) {
+                console.log(chalk.red('➖ Module removed'));
+                this.loadModules();
+            }
+        });
+    }
+
+    setupTerminalCommands() {
+        this.rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout,
+            prompt: chalk.gray('⚡ ')
+        });
+        
+        this.rl.on('line', async (input) => {
+            const command = input.trim();
+            
+            if (this.terminalMode === 'phone_input') {
+                const phoneNumber = command.replace(/\D/g, '');
+                if (phoneNumber.length >= 10) {
+                    try {
+                        console.log(chalk.yellow('📱 Requesting pairing code...'));
+                        this.pairingCode = await this.requestPairingCode(phoneNumber);
+                        console.log(chalk.green(`✅ Pairing code: ${this.pairingCode}`));
+                        console.log(chalk.cyan('📲 Enter this code in your WhatsApp app'));
+                        this.phoneNumber = phoneNumber;
+                        this.terminalMode = 'normal';
+                    } catch (error) {
+                        console.log(chalk.red('❌ Failed to request pairing code:', error.message));
+                        this.terminalMode = 'normal';
+                    }
+                } else {
+                    console.log(chalk.red('❌ Invalid phone number. Please enter a valid number:'));
+                }
+                this.rl.prompt();
+                return;
+            }
+
+            await this.handleTerminalCommand(command);
+            this.rl.prompt();
+        });
+        
+        this.rl.prompt();
+    }
+
+    async handleTerminalCommand(command) {
+        const cmd = command.toLowerCase();
+        
+        switch (cmd) {
+            case 'phone':
+                if (!this.isAuthenticated) {
+                    this.loginMethod = 'phone';
+                    console.log(chalk.yellow('📱 Phone Login Mode'));
+                    console.log(chalk.cyan('Enter phone number (with country code, no +):'));
+                    this.terminalMode = 'phone_input';
+                } else {
+                    console.log(chalk.red('❌ Already authenticated'));
+                }
+                break;
+
+            case 'h':
+            case 'help':
+                this.showTerminalHelp();
+                break;
+
+            case 'r':
+            case 'reload':
+                console.log(chalk.yellow('🔄 Reloading modules...'));
+                this.loadModules();
+                break;
+
+            case 'rst':
+            case 'restart':
+                await this.performRestart();
+                break;
+
+            case 's':
+            case 'status':
+                await this.showStatus();
+                break;
+
+            case 'm':
+            case 'modules':
+                this.showModules();
+                break;
+
+            case 'u':
+            case 'users':
+                this.showUsers();
+                break;
+
+            case 'a':
+            case 'admins':
+                this.showAdmins();
+                break;
+
+            case 'l':
+            case 'logs':
+                await this.showLogs();
+                break;
+
+            case 'c':
+            case 'clear':
+                console.clear();
+                this.showHeader();
+                console.log(chalk.green('✅ Console cleared'));
+                break;
+
+            case 'stats':
+                this.showStats();
+                break;
+
+            case 'config':
+                this.showConfig();
+                break;
+
+            case 'q':
+            case 'quit':
+                await this.performShutdown();
+                break;
+
+            case '':
+                if (this.isAuthenticated) {
+                    console.log(chalk.green('✅ Bot is running'));
+                } else {
+                    console.log(chalk.yellow('🔄 Reconnecting...'));
+                    this.client.initialize();
+                }
+                break;
+
+            default:
+                if (cmd.startsWith('ban ')) {
+                    const userId = cmd.split(' ')[1];
+                    await this.banUser(userId);
+                } else if (cmd.startsWith('unban ')) {
+                    const userId = cmd.split(' ')[1];
+                    await this.unbanUser(userId);
+                } else if (cmd.startsWith('admin add ')) {
+                    const userId = cmd.split(' ')[2];
+                    await this.addAdmin(userId);
+                } else if (cmd.startsWith('admin remove ')) {
+                    const userId = cmd.split(' ')[2];
+                    await this.removeAdmin(userId);
+                } else {
+                    console.log(chalk.red(`❌ Unknown command: ${command}`));
+                    console.log(chalk.gray('Type "h" for help'));
+                }
+        }
+    }
+
+    showTerminalHelp() {
+        console.log(chalk.yellow.bold('⚡ Terminal Commands:'));
+        console.log(chalk.cyan('  h/help              📋 Show this help'));
+        console.log(chalk.cyan('  r/reload            🔄 Reload modules'));
+        console.log(chalk.cyan('  s/status            📊 Show bot status'));
+        console.log(chalk.cyan('  m/modules           🧩 List loaded modules'));
+        console.log(chalk.cyan('  u/users             👥 Show user list'));
+        console.log(chalk.cyan('  a/admins            🔑 Show admin list'));
+        console.log(chalk.cyan('  l/logs              📝 Show recent logs'));
+        console.log(chalk.cyan('  c/clear             🧹 Clear console'));
+        console.log(chalk.cyan('  stats               📈 Show statistics'));
+        console.log(chalk.cyan('  config              ⚙️  Show configuration'));
+        console.log(chalk.cyan('  ban <user>          🚫 Ban user'));
+        console.log(chalk.cyan('  unban <user>        ✅ Unban user'));
+        console.log(chalk.cyan('  admin add <user>    ➕ Add admin'));
+        console.log(chalk.cyan('  admin remove <user> ➖ Remove admin'));
+        console.log(chalk.cyan('  phone               📱 Switch to phone login'));
+        console.log(chalk.cyan('  rst/restart         🔄 Restart bot'));
+        console.log(chalk.cyan('  q/quit              🚪 Exit bot'));
+    }
+
+    async showStatus() {
+        const uptime = moment.duration(Date.now() - this.startTime);
+        const memory = process.memoryUsage();
+        const memUsed = (memory.heapUsed / 1024 / 1024).toFixed(2);
+        const memTotal = (memory.rss / 1024 / 1024).toFixed(2);
+
+        console.log(chalk.green.bold('📊 Bot Status:'));
+        console.log(chalk.cyan(`  🔗 Connection: ${this.isAuthenticated ? 'Connected' : 'Disconnected'}`));
+        console.log(chalk.cyan(`  📱 Login Method: ${this.loginMethod}`));
+        console.log(chalk.cyan(`  ⏱️  Uptime: ${uptime.humanize()}`));
+        console.log(chalk.cyan(`  💾 Memory: ${memUsed}MB / ${memTotal}MB`));
+        console.log(chalk.cyan(`  👥 Users: ${this.users.size}`));
+        console.log(chalk.cyan(`  💬 Messages: ${this.messageCount}`));
+        console.log(chalk.cyan(`  🧩 Modules: ${this.modules.size}`));
+        console.log(chalk.cyan(`  🔑 Admins: ${this.admins.size}`));
+        console.log(chalk.cyan(`  📅 Scheduled: ${this.scheduledMessages.size}`));
+        console.log(chalk.cyan(`  ⚡ Queue: ${this.messageQueue.length}`));
+        console.log(chalk.cyan(`  🌐 Web Server: ${this.webServer ? 'Running' : 'Disabled'}`));
+        
+        if (this.botNumber) {
+            console.log(chalk.cyan(`  📞 Bot Number: ${this.botNumber}`));
+        }
+    }
+
+    showModules() {
+        console.log(chalk.yellow.bold('🧩 Loaded Modules:'));
+        for (const [name, module] of this.modules) {
+            const prefix = module.adminOnly ? chalk.red('🔒') : chalk.green('🟢');
+            const status = module.enabled ? chalk.green('✅') : chalk.red('❌');
+            const usage = module.usageCount || 0;
+            console.log(`  ${prefix} ${status} ${name} - ${module.description} (Used: ${usage})`);
+        }
+    }
+
+    showUsers() {
+        console.log(chalk.yellow.bold(`👥 Users (${this.users.size}):`));
+        const sortedUsers = Array.from(this.users.values())
+            .sort((a, b) => b.messageCount - a.messageCount)
+            .slice(0, 20);
+            
+        for (const user of sortedUsers) {
+            const prefix = user.isAdmin ? chalk.red('👑') : user.isBanned ? chalk.red('🚫') : chalk.green('👤');
+            const online = this.isUserOnline(user.id) ? chalk.green('🟢') : chalk.gray('⚫');
+            console.log(`  ${prefix} ${online} ${user.name} (${user.id}) - ${user.messageCount} msgs, ${user.totalCommands} cmds`);
+        }
+        
+        if (this.users.size > 20) {
+            console.log(chalk.gray(`  ... and ${this.users.size - 20} more users`));
+        }
+    }
+
+    showAdmins() {
+        console.log(chalk.yellow.bold(`🔑 Admins (${this.admins.size}):`));
+        let count = 1;
+        for (const adminId of this.admins) {
+            const user = this.users.get(adminId);
+            const name = user ? user.name : adminId;
+            const online = this.isUserOnline(adminId) ? chalk.green('🟢') : chalk.gray('⚫');
+            console.log(chalk.red(`  ${count}. ${online} ${name} (${adminId})`));
+            count++;
+        }
+    }
+
+    async showLogs() {
+        try {
+            const logContent = await fs.readFile(this.logFile, 'utf8');
+            const lines = logContent.split('\n').slice(-15).filter(line => line.trim());
+            console.log(chalk.yellow.bold('📝 Recent Logs:'));
+            lines.forEach(line => {
+                const colorMap = {
+                    'ERROR': chalk.red,
+                    'WARNING': chalk.yellow,
+                    'INFO': chalk.cyan,
+                    'DEBUG': chalk.gray
+                };
+                const type = line.match(/\[(ERROR|WARNING|INFO|DEBUG)\]/)?.[1];
+                const color = colorMap[type] || chalk.white;
+                console.log(color(`  ${line}`));
+            });
+        } catch (error) {
+            console.log(chalk.red('❌ No logs available'));
+        }
+    }
+
+    showStats() {
+        console.log(chalk.yellow.bold('📈 Statistics:'));
+        console.log(chalk.cyan(`  📨 Messages Sent: ${this.messageStats.sent}`));
+        console.log(chalk.cyan(`  📩 Messages Received: ${this.messageStats.received}`));
+        console.log(chalk.cyan(`  🤖 Commands Executed: ${this.messageStats.commands}`));
+        console.log(chalk.cyan(`  ❌ Errors: ${this.messageStats.errors}`));
+        console.log(chalk.cyan(`  ⚡ Avg Response Time: ${this.performanceMetrics.avgResponseTime.toFixed(2)}ms`));
+        console.log(chalk.cyan(`  📊 Total Requests: ${this.performanceMetrics.totalRequests}`));
+        console.log(chalk.cyan(`  🌐 Active Sessions: ${this.userSessions.size}`));
+    }
+
+    showConfig() {
+        console.log(chalk.yellow.bold('⚙️ Configuration:'));
+        for (const [key, value] of Object.entries(this.config)) {
+            console.log(chalk.cyan(`  ${key}: ${JSON.stringify(value)}`));
+        }
+    }
+
+    async banUser(userId) {
+        if (this.users.has(userId)) {
+            const user = this.users.get(userId);
+            if (user.isAdmin) {
+                console.log(chalk.red('❌ Cannot ban admin user'));
+                return;
+            }
+            user.isBanned = true;
+            await this.saveUsers();
+            console.log(chalk.green(`✅ User ${user.name} banned`));
+            this.log(`User banned: ${userId}`);
+        } else {
+            console.log(chalk.red('❌ User not found'));
+        }
+    }
+
+    async unbanUser(userId) {
+        if (this.users.has(userId)) {
+            const user = this.users.get(userId);
+            user.isBanned = false;
+            await this.saveUsers();
+            console.log(chalk.green(`✅ User ${user.name} unbanned`));
+            this.log(`User unbanned: ${userId}`);
+        } else {
+            console.log(chalk.red('❌ User not found'));
+        }
+    }
+
+    async addAdmin(userId) {
+        this.admins.add(userId);
+        if (this.users.has(userId)) {
+            this.users.get(userId).isAdmin = true;
+        }
+        await this.saveAdmins();
+        await this.saveUsers();
+        console.log(chalk.green(`✅ Admin added: ${userId}`));
+        this.log(`Admin added: ${userId}`);
+    }
+
+    async removeAdmin(userId) {
+        if (userId === this.botNumber) {
+            console.log(chalk.red('❌ Cannot remove bot owner'));
+            return;
+        }
+        this.admins.delete(userId);
+        if (this.users.has(userId)) {
+            this.users.get(userId).isAdmin = false;
+        }
+        await this.saveAdmins();
+        await this.saveUsers();
+        console.log(chalk.green(`✅ Admin removed: ${userId}`));
+        this.log(`Admin removed: ${userId}`);
+    }
+
+    async performRestart() {
+        if (this.restartInProgress) {
+            console.log(chalk.yellow('⚠️ Restart already in progress'));
+            return;
+        }
+        
+        this.restartInProgress = true;
+        console.log(chalk.yellow('🔄 Restarting bot...'));
+        this.log('Bot manual restart initiated');
+        
+        try {
+            await this.saveUsers();
+            await this.saveAdmins();
+            await this.saveScheduledMessages();
+            this.saveConfig();
+            
+            if (this.watcher) {
+                this.watcher.close();
+                this.watcher = null;
+            }
+            
+            if (this.webServer) {
+                this.webServer.close();
+            }
+            
+            if (this.rl) {
+                this.rl.close();
+            }
+            
+            await this.client.destroy();
+            clearInterval(this.progressInterval);
+            
+            this.isAuthenticated = false;
+            this.messageQueue = [];
+            this.isProcessingQueue = false;
+            
+            setTimeout(() => {
+                this.createClient();
+                this.setupEventHandlers();
+                this.setupWatcher();
+                this.setupTerminalCommands();
+                this.setupWebServer();
+                this.start();
+                this.restartInProgress = false;
+            }, 3000);
+            
+        } catch (error) {
+            this.log(`Error during restart: ${error.message}`, 'ERROR');
+            console.log(chalk.red('❌ Restart failed:', error.message));
+            this.restartInProgress = false;
+        }
+    }
+
+    async performShutdown() {
+        console.log(chalk.yellow('🔄 Shutting down bot...'));
+        this.log('Bot shutting down');
+        
+        try {
+            await this.saveUsers();
+            await this.saveAdmins();
+            await this.saveScheduledMessages();
+            this.saveConfig();
+            
+            if (this.watcher) {
+                this.watcher.close();
+            }
+            
+            if (this.webServer) {
+                this.webServer.close();
+            }
+            
+            if (this.rl) {
+                this.rl.close();
+            }
+            
+            await this.client.destroy();
+            clearInterval(this.progressInterval);
+            
+            console.log(chalk.green('✅ Bot shutdown complete'));
+            process.exit(0);
+        } catch (error) {
+            this.log(`Error during shutdown: ${error.message}`, 'ERROR');
+            console.log(chalk.red('❌ Shutdown failed:', error.message));
+            process.exit(1);
+        }
+    }
+
+    restart() {
+        if (this.restartInProgress) return;
+        
+        console.log(chalk.yellow('🔄 Auto-restarting bot...'));
+        this.log('Bot auto restart');
+        this.restartInProgress = true;
+        
+        setTimeout(() => {
+            this.isAuthenticated = false;
+            this.client.initialize();
+            this.restartInProgress = false;
+        }, 5000);
+    }
+
+    start() {
+        console.clear();
+        this.showHeader();
+        console.log(chalk.yellow('🚀 Starting WhatsApp Bot...'));
+        console.log(chalk.cyan(`📱 Login method: ${this.loginMethod}`));
+        console.log(chalk.cyan(`🌐 Web server: ${this.config.webServerEnabled ? 'Enabled' : 'Disabled'}`));
+        console.log(chalk.cyan(`🔧 Self commands: ${this.allowSelfCommands ? 'Enabled' : 'Disabled'}`));
+        
+        if (this.loginMethod === 'qr') {
+            console.log(chalk.gray('Type "phone" to switch to phone number login'));
+        }
+        
+        this.log('Bot starting');
+        global.botInstance = this;
+        this.client.initialize();
+    }
+}
+
+process.on('SIGINT', async () => {
+    console.log(chalk.yellow('\n🔄 Shutting down bot...'));
+    if (global.botInstance) {
+        await global.botInstance.performShutdown();
+    } else {
+        process.exit(0);
+    }
+});
+
+process.on('uncaughtException', (error) => {
+    console.log(chalk.red('❌ Uncaught Exception:', error.message));
+    if (global.botInstance) {
+        global.botInstance.log(`Uncaught Exception: ${error.message}`, 'ERROR');
+        global.botInstance.saveUsers();
+        global.botInstance.saveAdmins();
+        global.botInstance.saveScheduledMessages();
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.log(chalk.red('❌ Unhandled Rejection:', reason));
+    if (global.botInstance) {
+        global.botInstance.log(`Unhandled Rejection: ${reason}`, 'ERROR');
+    }
+});
+
+if (cluster.isMaster && process.env.NODE_ENV === 'production') {
+    const numCPUs = os.cpus().length;
+    console.log(chalk.cyan(`🚀 Master process starting ${numCPUs} workers`));
+    
+    for (let i = 0; i < Math.min(numCPUs, 2); i++) {
+        cluster.fork();
+    }
+    
+    cluster.on('exit', (worker, code, signal) => {
+        console.log(chalk.red(`❌ Worker ${worker.process.pid} died`));
+        cluster.fork();
+    });
+} else {
+    const bot = new WABot();
+    bot.start();
+}
+
+module.exports = WABot;

@@ -1,0 +1,53 @@
+# Node modules
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# dotenv environment files
+.env
+.env.*.local
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Optional cache folders
+.cache/
+.nyc_output/
+coverage/
+.next/
+out/
+.wwebjs_cache/
+session/
+tmp/
+logs/
+
+# IDE/editor config
+.vscode/
+.idea/
+
+# PM2 process file
+pids/
+*.pid
+*.seed
+
+# TypeScript
+*.tsbuildinfo
+
+# Others
+*.tgz
+*.log
+*.bak
+*.swp
+*.swo
+
+# Test output
+test-output/
