@@ -29,6 +29,7 @@ out/
 session/
 tmp/
 logs/
+data/
 
 # IDE/editor config
 .vscode/
