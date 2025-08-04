@@ -25,9 +25,9 @@ class BotManager {
         this.logsDir = path.join(__dirname, 'logs');
         this.sessionDir = path.join(__dirname, 'session');
         this.modulesDir = path.join(__dirname, 'modules');
-        this.configPath = path.join(__dirname, 'config.json');
+        this.configPath = path.join(this.dataDir, 'config.json');
+        this.oldConfigPath = path.join(__dirname, 'config.json');
         
-        // GitHub configuration
         this.repoUrl = 'https://github.com/revyid/ReBot.git';
         this.repoOwner = 'revyid';
         this.repoName = 'ReBot';
@@ -57,90 +57,75 @@ class BotManager {
     loadConfig() {
         const defaultConfig = {
             autoUpdate: true,
-            updateCheckInterval: 30, // minutes
+            updateCheckInterval: 30,
             updateOnStart: true,
             backupBeforeUpdate: true,
             restartAfterUpdate: true,
             allowPrerelease: false,
-            updateBranch: 'main'
+            updateBranch: 'main',
+            botConfig: {
+                prefix: '!',
+                adminNumbers: [],
+                ownerNumber: '',
+                botName: 'ReBot',
+                sessionName: 'session-WhatsApp-bot',
+                antiSpam: true,
+                maxMessagePerMinute: 20,
+                welcomeMessage: true,
+                autoReply: false,
+                logLevel: 'info'
+            }
         };
 
         try {
-            if (fs.existsSync(this.configPath)) {
+            let finalConfig = defaultConfig;
+            let configMigrated = false;
+
+            if (fs.existsSync(this.oldConfigPath)) {
+                const oldConfig = JSON.parse(fs.readFileSync(this.oldConfigPath, 'utf8'));
+                this.log('Found old config.json in root, migrating...', 'INFO');
+                
+                if (fs.existsSync(this.configPath)) {
+                    const dataConfig = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                    finalConfig = { ...defaultConfig, ...oldConfig, ...dataConfig };
+                } else {
+                    finalConfig = { ...defaultConfig, ...oldConfig };
+                }
+                
+                fs.writeFileSync(this.configPath, JSON.stringify(finalConfig, null, 2));
+                fs.unlinkSync(this.oldConfigPath);
+                configMigrated = true;
+                this.log('Config migrated successfully to ./data/config.json', 'SUCCESS');
+            } else if (fs.existsSync(this.configPath)) {
                 const existingConfig = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                finalConfig = { ...defaultConfig, ...existingConfig };
                 
-                // Check if auto-update config is missing and add it
                 let configUpdated = false;
-                const mergedConfig = { ...defaultConfig, ...existingConfig };
-                
-                // Check for missing auto-update keys
                 Object.keys(defaultConfig).forEach(key => {
                     if (!(key in existingConfig)) {
-                        this.log(`Adding missing config: ${key} = ${defaultConfig[key]}`, 'INFO');
+                        this.log(`Adding missing config: ${key}`, 'INFO');
                         configUpdated = true;
                     }
                 });
                 
-                // Update config file if new keys were added
                 if (configUpdated) {
-                    fs.writeFileSync(this.configPath, JSON.stringify(mergedConfig, null, 2));
-                    this.log('Updated config.json with auto-update settings', 'SUCCESS');
+                    fs.writeFileSync(this.configPath, JSON.stringify(finalConfig, null, 2));
+                    this.log('Updated config.json with missing settings', 'SUCCESS');
                 }
-                
-                return mergedConfig;
             } else {
                 fs.writeFileSync(this.configPath, JSON.stringify(defaultConfig, null, 2));
-                this.log('Created default config.json with auto-update settings', 'SUCCESS');
-                return defaultConfig;
+                this.log('Created default config.json in ./data/', 'SUCCESS');
+                finalConfig = defaultConfig;
             }
+
+            if (configMigrated) {
+                this.log('Migration completed: old config removed, unified config created', 'SUCCESS');
+            }
+
+            return finalConfig;
         } catch (error) {
             this.log(`Failed to load config: ${error.message}`, 'ERROR');
             return defaultConfig;
-        }
-    }
-
-    updateConfigWithAutoUpdate() {
-        try {
-            if (fs.existsSync(this.configPath)) {
-                const existingConfig = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
-                
-                const autoUpdateDefaults = {
-                    autoUpdate: true,
-                    updateCheckInterval: 30,
-                    updateOnStart: true,
-                    backupBeforeUpdate: true,
-                    restartAfterUpdate: true,
-                    allowPrerelease: false,
-                    updateBranch: 'main'
-                };
-                
-                let configUpdated = false;
-                
-                // Add missing auto-update keys
-                Object.keys(autoUpdateDefaults).forEach(key => {
-                    if (!(key in existingConfig)) {
-                        existingConfig[key] = autoUpdateDefaults[key];
-                        configUpdated = true;
-                        this.log(`Added missing config: ${key} = ${autoUpdateDefaults[key]}`, 'INFO');
-                    }
-                });
-                
-                if (configUpdated) {
-                    fs.writeFileSync(this.configPath, JSON.stringify(existingConfig, null, 2));
-                    this.log('Successfully updated config.json with auto-update settings', 'SUCCESS');
-                    this.config = existingConfig;
-                    return true;
-                } else {
-                    this.log('Config already contains all auto-update settings', 'INFO');
-                    return false;
-                }
-            } else {
-                this.log('Config file not found, will be created automatically', 'INFO');
-                return false;
-            }
-        } catch (error) {
-            this.log(`Failed to update config: ${error.message}`, 'ERROR');
-            return false;
         }
     }
 
@@ -161,7 +146,7 @@ class BotManager {
         this.getCurrentCommitHash();
         
         if (this.config.updateOnStart) {
-            setTimeout(() => this.checkForUpdates(), 5000);
+            setTimeout(() => this.checkForUpdates(false), 5000);
         }
         
         if (this.config.autoUpdate && this.config.updateCheckInterval > 0) {
@@ -209,8 +194,8 @@ class BotManager {
         this.log(`Update checker enabled (${this.config.updateCheckInterval}m interval)`, 'INFO');
     }
 
-    async checkForUpdates() {
-        if (!this.config.autoUpdate) {
+    async checkForUpdates(forceCheck = false) {
+        if (!this.config.autoUpdate && !forceCheck) {
             this.log('Auto-update is disabled', 'INFO');
             return;
         }
@@ -305,14 +290,11 @@ class BotManager {
             
             this.log(`${this.symbols.info} Creating backup...`, 'INFO');
             
-            // Create backup directory
             fs.mkdirSync(backupDir, { recursive: true });
             
-            // Copy important files (excluding node_modules, logs, session, etc.)
             const filesToBackup = [
                 'bot.js',
                 'package.json',
-                'config.json',
                 'modules',
                 'data'
             ];
@@ -331,8 +313,6 @@ class BotManager {
             }
             
             this.log(`Backup created: ${path.basename(backupDir)}`, 'SUCCESS');
-            
-            // Keep only last 5 backups
             this.cleanupOldBackups();
             
         } catch (error) {
@@ -353,7 +333,6 @@ class BotManager {
                 }))
                 .sort((a, b) => b.mtime - a.mtime);
             
-            // Keep only the 5 most recent backups
             if (backups.length > 5) {
                 for (let i = 5; i < backups.length; i++) {
                     execSync(`rm -rf "${backups[i].path}"`, { stdio: 'ignore' });
@@ -369,7 +348,6 @@ class BotManager {
         try {
             this.log(`${this.symbols.download} Starting update process...`, 'INFO');
             
-            // Stop bot if running
             const wasRunning = this.botProcess && !this.botProcess.killed;
             if (wasRunning) {
                 this.log('Stopping bot for update...', 'INFO');
@@ -377,21 +355,25 @@ class BotManager {
                 await new Promise(resolve => setTimeout(resolve, 2000));
             }
             
-            // Perform git pull
+            const oldCommitHash = this.currentCommitHash;
+            
             this.log('Pulling latest changes...', 'INFO');
             execSync('git fetch origin', { cwd: __dirname, stdio: 'inherit' });
             execSync(`git reset --hard origin/${this.config.updateBranch}`, { cwd: __dirname, stdio: 'inherit' });
             
-            // Update npm packages
             this.log('Updating dependencies...', 'INFO');
-            execSync('npm install --production', { cwd: __dirname, stdio: 'inherit' });
+            execSync('pnpm install --production', { cwd: __dirname, stdio: 'inherit' });
             
-            // Update current commit hash
             this.getCurrentCommitHash();
             
-            this.log(`${this.symbols.success} Update completed successfully!`, 'SUCCESS');
+            if (this.currentCommitHash === oldCommitHash) {
+                this.log('Warning: Commit hash unchanged after update', 'WARNING');
+                this.log('This might indicate an update issue', 'WARNING');
+            }
             
-            // Restart bot if it was running
+            this.log(`${this.symbols.success} Update completed successfully!`, 'SUCCESS');
+            this.log(`Updated from ${oldCommitHash ? oldCommitHash.substring(0, 7) : 'unknown'} to ${this.currentCommitHash.substring(0, 7)}`, 'SUCCESS');
+            
             if (wasRunning && this.config.restartAfterUpdate) {
                 this.log('Restarting bot...', 'INFO');
                 setTimeout(() => this.start(), 2000);
@@ -400,8 +382,6 @@ class BotManager {
         } catch (error) {
             this.log(`Update failed: ${error.message}`, 'ERROR');
             this.recordError(error);
-            
-            // Try to restore from backup if available
             await this.restoreFromBackup();
             throw error;
         }
@@ -427,11 +407,23 @@ class BotManager {
             const latestBackup = backups[0];
             this.log(`Restoring from backup: ${latestBackup.name}`, 'WARNING');
             
-            // Restore files
             execSync(`cp -r "${latestBackup.path}"/* "${__dirname}"/`, { stdio: 'inherit' });
             
-            this.log('Backup restored successfully', 'SUCCESS');
+            try {
+                execSync('git reset --hard HEAD', { cwd: __dirname, stdio: 'inherit' });
+                this.log('Git repository reset to current HEAD', 'INFO');
+            } catch (gitError) {
+                this.log(`Git reset failed: ${gitError.message}`, 'WARNING');
+            }
+            
             this.getCurrentCommitHash();
+            this.log('Backup restored successfully', 'SUCCESS');
+            
+            this.log('Forcing update check after restore...', 'INFO');
+            this.lastUpdateCheck = null;
+            setTimeout(() => {
+                this.checkForUpdates();
+            }, 5000);
             
         } catch (error) {
             this.log(`Backup restore failed: ${error.message}`, 'ERROR');
@@ -742,11 +734,10 @@ class BotManager {
             }
         });
 
-        // Handle update signal
         process.on('SIGUSR1', () => {
             if (!this.shutdownInProgress) {
                 this.log('Received SIGUSR1, checking for updates...', 'INFO');
-                this.checkForUpdates();
+                this.checkForUpdates(true);
             }
         });
     }
@@ -806,7 +797,7 @@ class BotManager {
     }
 
     showStatus() {
-        console.log(chalk.cyan(`${this.symbols.system} WhatsApp Bot Manager v3.2 (with Auto-Update)`));
+        console.log(chalk.cyan(`${this.symbols.system} WhatsApp Bot Manager v3.3 (Unified Config)`));
         console.log(chalk.gray('─'.repeat(50)));
         console.log(chalk.cyan(`${this.symbols.status} Process ID: ${process.pid}`));
         console.log(chalk.cyan(`${this.symbols.status} Restart Count: ${this.restartCount}`));
@@ -818,6 +809,7 @@ class BotManager {
         console.log(chalk.cyan(`${this.symbols.status} Update Interval: ${this.config.updateCheckInterval}m`));
         console.log(chalk.cyan(`${this.symbols.status} Current Commit: ${this.currentCommitHash ? this.currentCommitHash.substring(0, 7) : 'unknown'}`));
         console.log(chalk.cyan(`${this.symbols.status} Last Update Check: ${this.lastUpdateCheck ? this.lastUpdateCheck.toLocaleTimeString() : 'Never'}`));
+        console.log(chalk.cyan(`${this.symbols.status} Config Location: ./data/config.json`));
         console.log(chalk.gray('─'.repeat(50)));
         
         if (this.config.autoUpdate) {
@@ -830,13 +822,11 @@ class BotManager {
         console.log(chalk.gray('─'.repeat(50)));
     }
 
-    // Manual update trigger
     async triggerUpdate() {
         this.log('Manual update triggered', 'INFO');
-        await this.checkForUpdates();
+        await this.checkForUpdates(true);
     }
 
-    // Toggle auto-update
     toggleAutoUpdate() {
         this.config.autoUpdate = !this.config.autoUpdate;
         this.saveConfig();
@@ -855,7 +845,6 @@ class BotManager {
         }
     }
 
-    // Set update interval
     setUpdateInterval(minutes) {
         if (minutes < 1) {
             this.log('Update interval must be at least 1 minute', 'ERROR');
@@ -876,7 +865,6 @@ class BotManager {
         this.log(`Update interval set to ${minutes} minutes`, 'SUCCESS');
     }
 
-    // Get version info
     async getVersionInfo() {
         try {
             const local = {
@@ -904,7 +892,6 @@ class BotManager {
         }
     }
 
-    // Show update status
     async showUpdateStatus() {
         const versionInfo = await this.getVersionInfo();
         
@@ -938,16 +925,77 @@ class BotManager {
         
         console.log(chalk.gray('─'.repeat(40)));
     }
+
+    updateBotConfig(key, value) {
+        if (!this.config.botConfig) {
+            this.config.botConfig = {};
+        }
+        
+        this.config.botConfig[key] = value;
+        this.saveConfig();
+        this.log(`Bot config updated: ${key} = ${value}`, 'SUCCESS');
+    }
+
+    getBotConfig(key) {
+        return this.config.botConfig ? this.config.botConfig[key] : undefined;
+    }
+
+    showConfig() {
+        console.log(chalk.cyan(`${this.symbols.info} Current Configuration`));
+        console.log(chalk.gray('─'.repeat(50)));
+        
+        console.log(chalk.cyan('Manager Settings:'));
+        console.log(`  Auto Update: ${this.config.autoUpdate}`);
+        console.log(`  Update Interval: ${this.config.updateCheckInterval}m`);
+        console.log(`  Update on Start: ${this.config.updateOnStart}`);
+        console.log(`  Backup Before Update: ${this.config.backupBeforeUpdate}`);
+        console.log(`  Restart After Update: ${this.config.restartAfterUpdate}`);
+        console.log(`  Update Branch: ${this.config.updateBranch}`);
+        
+        if (this.config.botConfig) {
+            console.log(chalk.cyan('Bot Settings:'));
+            Object.keys(this.config.botConfig).forEach(key => {
+                console.log(`  ${key}: ${this.config.botConfig[key]}`);
+            });
+        }
+        
+        console.log(chalk.gray('─'.repeat(50)));
+        console.log(chalk.cyan(`Config file: ${this.configPath}`));
+    }
+
+    migrateOldConfig() {
+        if (fs.existsSync(this.oldConfigPath)) {
+            try {
+                const oldConfig = JSON.parse(fs.readFileSync(this.oldConfigPath, 'utf8'));
+                const currentConfig = fs.existsSync(this.configPath) ? 
+                    JSON.parse(fs.readFileSync(this.configPath, 'utf8')) : {};
+                
+                const mergedConfig = { ...this.config, ...oldConfig, ...currentConfig };
+                
+                fs.writeFileSync(this.configPath, JSON.stringify(mergedConfig, null, 2));
+                fs.unlinkSync(this.oldConfigPath);
+                
+                this.config = mergedConfig;
+                this.log('Successfully migrated old config to ./data/config.json', 'SUCCESS');
+                return true;
+            } catch (error) {
+                this.log(`Failed to migrate old config: ${error.message}`, 'ERROR');
+                return false;
+            }
+        } else {
+            this.log('No old config found to migrate', 'INFO');
+            return false;
+        }
+    }
 }
 
 if (require.main === module) {
     console.clear();
-    console.log(chalk.cyan(`◈ WhatsApp Bot Manager v3.2 with Auto-Update`));
+    console.log(chalk.cyan(`◈ WhatsApp Bot Manager v3.3 - Unified Config`));
     console.log(chalk.gray('─'.repeat(55)));
     
     const manager = new BotManager();
     
-    // Handle command line arguments
     const args = process.argv.slice(2);
     
     if (args.includes('--check-update')) {
@@ -973,13 +1021,18 @@ if (require.main === module) {
         }
     }
     
-    if (args.includes('--update-config')) {
-        const updated = manager.updateConfigWithAutoUpdate();
-        if (updated) {
-            console.log(chalk.green(`${manager.symbols.success} Config updated with auto-update settings`));
-        } else {
-            console.log(chalk.yellow(`${manager.symbols.info} Config already up to date`));
+    if (args.includes('--migrate-config')) {
+        const migrated = manager.migrateOldConfig();
+        if (migrated) {
+            console.log(chalk.green(`${manager.symbols.success} Config migration completed`));
         }
+        if (!args.includes('--start')) {
+            process.exit(0);
+        }
+    }
+    
+    if (args.includes('--show-config')) {
+        manager.showConfig();
         if (!args.includes('--start')) {
             process.exit(0);
         }
@@ -998,6 +1051,25 @@ if (require.main === module) {
         }
     }
     
+    if (args.includes('--set-bot-config')) {
+        const configIndex = args.indexOf('--set-bot-config');
+        const key = args[configIndex + 1];
+        const value = args[configIndex + 2];
+        if (key && value !== undefined) {
+            try {
+                const parsedValue = JSON.parse(value);
+                manager.updateBotConfig(key, parsedValue);
+            } catch (e) {
+                manager.updateBotConfig(key, value);
+            }
+        } else {
+            console.log(chalk.red('Invalid bot config parameters'));
+        }
+        if (!args.includes('--start')) {
+            process.exit(0);
+        }
+    }
+    
     if (args.includes('--version') || args.includes('-v')) {
         manager.showUpdateStatus().then(() => {
             process.exit(0);
@@ -1005,27 +1077,28 @@ if (require.main === module) {
     }
     
     if (args.includes('--help') || args.includes('-h')) {
-        console.log(chalk.cyan('WhatsApp Bot Manager v3.2 - Command Line Options:'));
+        console.log(chalk.cyan('WhatsApp Bot Manager v3.3 - Command Line Options:'));
         console.log('');
-        console.log(chalk.white('  --start                Start the bot manager'));
-        console.log(chalk.white('  --check-update         Check for updates'));
-        console.log(chalk.white('  --update               Force update'));
-        console.log(chalk.white('  --toggle-auto-update   Toggle auto-update on/off'));
-        console.log(chalk.white('  --update-config        Add auto-update settings to existing config'));
-        console.log(chalk.white('  --set-interval <min>   Set update check interval in minutes'));
-        console.log(chalk.white('  --version, -v          Show version information'));
-        console.log(chalk.white('  --help, -h             Show this help'));
+        console.log(chalk.white('  --start                    Start the bot manager'));
+        console.log(chalk.white('  --check-update             Check for updates'));
+        console.log(chalk.white('  --update                   Force update'));
+        console.log(chalk.white('  --toggle-auto-update       Toggle auto-update on/off'));
+        console.log(chalk.white('  --migrate-config           Migrate old config to ./data/'));
+        console.log(chalk.white('  --show-config              Show current configuration'));
+        console.log(chalk.white('  --set-interval <min>       Set update check interval'));
+        console.log(chalk.white('  --set-bot-config <k> <v>   Set bot configuration'));
+        console.log(chalk.white('  --version, -v              Show version information'));
+        console.log(chalk.white('  --help, -h                 Show this help'));
         console.log('');
         console.log(chalk.gray('Examples:'));
         console.log(chalk.gray('  node main.js --start'));
-        console.log(chalk.gray('  node main.js --check-update'));
-        console.log(chalk.gray('  node main.js --update --start'));
-        console.log(chalk.gray('  node main.js --update-config'));
+        console.log(chalk.gray('  node main.js --migrate-config --start'));
+        console.log(chalk.gray('  node main.js --show-config'));
+        console.log(chalk.gray('  node main.js --set-bot-config prefix "."'));
         console.log(chalk.gray('  node main.js --set-interval 15 --start'));
         process.exit(0);
     }
     
-    // Start the manager (default behavior or with --start flag)
     if (args.length === 0 || args.includes('--start')) {
         manager.start();
         

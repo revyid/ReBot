@@ -1,4 +1,3 @@
-//test
 const { Client, LocalAuth, NoAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const chalk = require('chalk');

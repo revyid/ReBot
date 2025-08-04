@@ -30,6 +30,7 @@ session/
 tmp/
 logs/
 data/
+backup/
 
 # IDE/editor config
 .vscode/
