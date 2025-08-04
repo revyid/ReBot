@@ -1,0 +1,9 @@
+{
+  "autoUpdate": true,
+  "updateCheckInterval": 30,
+  "updateOnStart": true,
+  "backupBeforeUpdate": true,
+  "restartAfterUpdate": true,
+  "allowPrerelease": false,
+  "updateBranch": "main"
+}

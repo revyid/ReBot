@@ -1,6 +1,6 @@
 {
-  "lastUpdated": "2025-08-04T11:05:52.139Z",
-  "count": 10,
+  "lastUpdated": "2025-08-04T12:30:24.036Z",
+  "count": 11,
   "users": {
     "6285185161613": {
       "id": "6285185161613",
@@ -8,15 +8,15 @@
       "firstSeen": "2025-08-03T04:40:08.549Z",
       "messageCount": 1,
       "isAdmin": true,
-      "lastActive": "2025-08-04T10:03:36.133Z"
+      "lastActive": "2025-08-04T12:26:27.968Z"
     },
     "6283178399486": {
       "id": "6283178399486",
       "name": "6283178399486",
       "firstSeen": "2025-08-03T04:42:30.218Z",
-      "messageCount": 4,
+      "messageCount": 5,
       "isAdmin": false,
-      "lastActive": "2025-08-04T10:27:31.633Z"
+      "lastActive": "2025-08-04T11:17:32.709Z"
     },
     "6281227444729": {
       "id": "6281227444729",
@@ -81,6 +81,14 @@
       "messageCount": 2,
       "isAdmin": false,
       "lastActive": "2025-08-04T11:01:39.341Z"
+    },
+    "6288239023860": {
+      "id": "6288239023860",
+      "name": "6288239023860",
+      "firstSeen": "2025-08-04T11:47:33.912Z",
+      "messageCount": 1,
+      "isAdmin": false,
+      "lastActive": "2025-08-04T11:47:33.919Z"
     }
   }
 }
