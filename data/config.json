@@ -1,15 +1,31 @@
 {
-  "maxConcurrentMessages": 10,
-  "messageDelay": 500,
-  "rateLimitMax": 20,
-  "rateLimitWindow": 60000,
-  "cooldownPeriod": 300000,
-  "typingDelayMin": 300,
-  "typingDelayMax": 1500,
-  "allowSelfCommands": true,
-  "webServerEnabled": true,
-  "apiPort": 3000,
-  "autoSaveInterval": 30000,
-  "logLevel": "INFO",
-  "enablePerformanceMonitoring": true
+  "symbols": {
+    "bullet": "◦",
+    "arrow": "▸",
+    "check": "✓",
+    "cross": "✗",
+    "warning": "⚠",
+    "info": "ℹ",
+    "success": "✅",
+    "error": "❌",
+    "status": "◉",
+    "admin": "◆",
+    "user": "◇",
+    "self": "◈",
+    "command": "⌘",
+    "terminal": "▣",
+    "message": "◈",
+    "system": "⬢",
+    "network": "◯",
+    "data": "◊"
+  },
+  "settings": {
+    "autoReply": false,
+    "welcomeMessage": true,
+    "rateLimitEnabled": true,
+    "typingSimulation": false,
+    "logLevel": "INFO",
+    "fastAuth": true,
+    "authTimeout": 45000
+  }
 }

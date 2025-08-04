@@ -90,7 +90,7 @@ module.exports = {
             const authorLine = `Author: @${data.author}`;
 
             if (data.type === 'Images') {
-                await handleImageDownload(data, imageSelection, statusMessage, titleLine, authorLine, timestamp, message, client);
+                await handleImageDownload(data, imageSelection, hdRequested, statusMessage, titleLine, authorLine, timestamp, message, client);
             } else if (data.type === 'Video') {
                 await handleVideoDownload(data, audioRequested, hdRequested, statusMessage, titleLine, authorLine, timestamp, message, client);
             } else {
@@ -108,7 +108,7 @@ module.exports = {
             } else if (err.message.includes('timeout')) {
                 errorMessage = 'Download timeout. Try with a shorter video.';
             } else if (err.message.includes('100MB')) {
-                errorMessage = 'Video too large (>100MB). Try audio extraction with --audio';
+                errorMessage = 'File too large (>100MB). Try a different format.';
             } else if (err.message.includes('Unsupported')) {
                 errorMessage = 'Unsupported TikTok post type.';
             } else if (err.message.includes('rate limit') || err.message.includes('429')) {
@@ -120,7 +120,7 @@ module.exports = {
             } else if (err.message.includes('codec') || err.message.includes('conversion')) {
                 errorMessage = 'Video format not supported. Conversion failed.';
             } else if (err.message.includes('Evaluation failed')) {
-                errorMessage = 'WhatsApp upload failed. Video might be corrupted.';
+                errorMessage = 'WhatsApp upload failed. File might be corrupted.';
             }
             
             await editMessage(statusMessage, `✕ ${errorMessage}`);
@@ -147,7 +147,7 @@ function cleanTikTokUrl(url) {
     return null;
 }
 
-async function handleImageDownload(data, imageSelection, statusMessage, titleLine, authorLine, timestamp, message, client) {
+async function handleImageDownload(data, imageSelection, hdRequested, statusMessage, titleLine, authorLine, timestamp, message, client) {
     const selectionIndices = parseImageSelection(imageSelection, data.images.length);
     const selectedImages = selectionIndices.map(i => ({
         url: data.images[i],
@@ -196,8 +196,21 @@ async function handleImageDownload(data, imageSelection, statusMessage, titleLin
         const file = downloadedFiles[i];
         try {
             const buf = await fs.readFile(file.path);
-            const media = new MessageMedia('image/jpeg', buf.toString('base64'), `Image_${file.label}.jpg`);
-            await message.reply(media, undefined, { caption: `Image ${file.label}` });
+            
+            if (hdRequested) {
+                const stats = await fs.stat(file.path);
+                const sizeMB = (stats.size / (1024 * 1024)).toFixed(1);
+                const filename = `${sanitizeFilename(data.title)}_${file.label}.jpg`;
+                const document = new MessageMedia('image/jpeg', buf.toString('base64'), filename);
+                await message.reply(document, undefined, { 
+                    sendMediaAsDocument: true,
+                    caption: `HD Image ${file.label} (${sizeMB}MB)`
+                });
+            } else {
+                const media = new MessageMedia('image/jpeg', buf.toString('base64'), `Image_${file.label}.jpg`);
+                await message.reply(media, undefined, { caption: `Image ${file.label}` });
+            }
+            
             uploadedCount++;
             await sleep(2000);
         } catch (error) {
@@ -224,7 +237,7 @@ async function handleVideoDownload(data, audioRequested, hdRequested, statusMess
         );
 
         const audioPath = path.join(TEMP_DIR, `${timestamp}.mp3`);
-        await extractAudioFromVideo(data.videoUrl, audioPath);
+        await extractAudioFromVideo(data.videoUrl, audioPath, hdRequested);
         
         const audioStats = await fs.stat(audioPath);
         if (audioStats.size === 0) {
@@ -232,20 +245,31 @@ async function handleVideoDownload(data, audioRequested, hdRequested, statusMess
             throw new Error('Audio extraction produced empty file');
         }
         
+        const audioSizeMB = (audioStats.size / (1024 * 1024)).toFixed(1);
         if (audioStats.size > 100 * 1024 * 1024) {
             await cleanup([audioPath]);
-            throw new Error(`Audio too large (${(audioStats.size / (1024 * 1024)).toFixed(1)}MB). WhatsApp limit is 100MB.`);
+            throw new Error(`Audio too large (${audioSizeMB}MB). WhatsApp limit is 100MB.`);
         }
 
         try {
             const buf = await fs.readFile(audioPath);
-            const media = new MessageMedia('audio/mpeg', buf.toString('base64'), `${sanitizeFilename(data.title)}.mp3`);
-            await message.reply(media);
+            
+            if (hdRequested) {
+                const filename = `${sanitizeFilename(data.title)}.mp3`;
+                const document = new MessageMedia('audio/mpeg', buf.toString('base64'), filename);
+                await message.reply(document, undefined, { 
+                    sendMediaAsDocument: true,
+                    caption: `Original Quality Audio (${audioSizeMB}MB)`
+                });
+            } else {
+                const media = new MessageMedia('audio/mpeg', buf.toString('base64'), `${sanitizeFilename(data.title)}.mp3`);
+                await message.reply(media);
+            }
             
             await editMessage(statusMessage,
                 `◉ ${titleLine}
 ◉ ${authorLine}
-◉ Audio extracted and sent ✓`
+◉ Audio extracted and sent (${audioSizeMB}MB) ✓`
             );
         } catch (error) {
             console.error('Audio send error:', error);
@@ -291,7 +315,8 @@ async function handleVideoDownload(data, audioRequested, hdRequested, statusMess
                 const filename = `${sanitizeFilename(data.title)}.mp4`;
                 const document = new MessageMedia('video/mp4', buf.toString('base64'), filename);
                 await message.reply(document, undefined, { 
-                    sendMediaAsDocument: true
+                    sendMediaAsDocument: true,
+                    caption: `HD Video (${rawSizeMB.toFixed(1)}MB)`
                 });
 
                 await editMessage(statusMessage,
@@ -356,7 +381,7 @@ async function handleVideoDownload(data, audioRequested, hdRequested, statusMess
                 throw new Error(`Video processing failed: ${error.message}`);
             }
         } finally {
-            await cleanup([rawVideoPath, processedVideoPath]);
+            await cleanup([rawVideoPath, processedVideoPath].filter(Boolean));
         }
     }
 }
@@ -453,7 +478,7 @@ async function convertVideoForWhatsApp(inputPath, outputPath) {
     }
 }
 
-async function extractAudioFromVideo(videoUrl, outputPath) {
+async function extractAudioFromVideo(videoUrl, outputPath, hdRequested) {
     try {
         try {
             await execAsync('ffmpeg -version', { timeout: 5000 });
@@ -461,7 +486,13 @@ async function extractAudioFromVideo(videoUrl, outputPath) {
             throw new Error('ffmpeg not found. Please install ffmpeg for audio extraction.');
         }
         
-        const command = `ffmpeg -y -i "${videoUrl}" -vn -acodec mp3 -ab 256k -ar 44100 -ac 2 -f mp3 "${outputPath}"`;
+        let command;
+        if (hdRequested) {
+            command = `ffmpeg -y -i "${videoUrl}" -vn -acodec mp3 -q:a 0 -ar 44100 -ac 2 -f mp3 "${outputPath}"`;
+        } else {
+            command = `ffmpeg -y -i "${videoUrl}" -vn -acodec mp3 -ab 256k -ar 44100 -ac 2 -f mp3 "${outputPath}"`;
+        }
+        
         await execAsync(command, { 
             timeout: 300000,
             maxBuffer: 50 * 1024 * 1024

@@ -1,5 +1,5 @@
 module.exports = {
-    name: 'listadmins',
+    name: 'listadmin',
     description: 'List all admins',
     adminOnly: true,
     hideFromList: false,
